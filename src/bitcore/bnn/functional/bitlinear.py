@@ -5,8 +5,12 @@ from typing import Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from bitlab.bitquantizer import (_parse_quant_type, dequantize, quantize_act,
-                                 quantize_weight)
+from ..bitquantizer import (
+    _parse_quant_type,
+    dequantize,
+    quantize_act,
+    quantize_weight,
+)
 
 
 class _BitLinearFunctional:

@@ -3,19 +3,11 @@
 from typing import Optional
 
 import torch
-<<<<<<< Updated upstream:src/bitlab/bnn/bitlayers/bitlinear.py
-import torch.nn as nn
-import torch.nn.functional as F
-
-from bitlab.bitquantizer import BitQuantizer
-from bitlab.bnn.functional import bitlinear
-=======
 from torch import nn
 import torch.nn.functional as F
 from ..bitquantizer import BitQuantizer
 from ..functional import bitlinear
 from .base import BaseBitLayer
->>>>>>> Stashed changes:src/bitcore/bnn/bitlayers/bitlinear.py
 
 
 class BitLinear(BaseBitLayer):

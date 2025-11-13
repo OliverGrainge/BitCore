@@ -1,10 +1,18 @@
 """Binary convolutional layer implementations built on BitLab quantization."""
 
+<<<<<<< Updated upstream:src/bitlab/bnn/bitlayers/bitconv2d.py
 from typing import Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+=======
+from typing import Optional, Tuple, Union
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+>>>>>>> Stashed changes:src/bitcore/bnn/bitlayers/bitconv2d.py
 
 from bitlab.bitquantizer import BitQuantizer
 from bitlab.bnn.functional import bitconv2d

@@ -3,14 +3,22 @@
 from typing import Optional
 
 import torch
+<<<<<<< Updated upstream:src/bitlab/bnn/bitlayers/bitlinear.py
 import torch.nn as nn
 import torch.nn.functional as F
 
 from bitlab.bitquantizer import BitQuantizer
 from bitlab.bnn.functional import bitlinear
+=======
+from torch import nn
+import torch.nn.functional as F
+from ..bitquantizer import BitQuantizer
+from ..functional import bitlinear
+from .base import BaseBitLayer
+>>>>>>> Stashed changes:src/bitcore/bnn/bitlayers/bitlinear.py
 
 
-class BitLinear(nn.Module):
+class BitLinear(BaseBitLayer):
     """
     A binary neural network linear layer that quantizes weights to {-1, 0, 1}.
 
@@ -58,6 +66,19 @@ class BitLinear(nn.Module):
         self._init_weights()
         self.quantizer = BitQuantizer(eps=eps, quant_type=quant_type)
 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply quantization-aware linear transformation suitable for training."""
+        dqx, dqw = self.quantizer(x, self.weight)
+        return F.linear(dqx, dqw, self.bias)
+
+    @classmethod 
+    def from_linear(cls, linear: nn.Linear, quant_type: str, eps: float = 1e-6) -> None: 
+        layer = cls(linear.in_features, linear.out_features, linear.bias is not None, eps, linear.quant_type)
+        layer.weight.data.copy_(linear.weight.data)
+        if linear.bias is not None:
+            layer.bias.data.copy_(linear.bias.data)
+        return layer
+
     def _init_weights(self) -> None:
         """Initialize weights using Xavier uniform initialization."""
         nn.init.xavier_uniform_(self.weight)
@@ -88,10 +109,3 @@ class BitLinear(nn.Module):
         """Run the quantized inference pathway after `deploy` has packed the weights."""
         return bitlinear(x, self.qws, self.qw, self.bias, self.eps, self.quant_type)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply quantization-aware linear transformation suitable for training."""
-        dqx, dqw = self.quantizer(x, self.weight)
-        return F.linear(dqx, dqw, self.bias)
-
-    def __repr__(self):
-        return f"BitLinear(in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}, eps={self.eps}, quant_type={self.quant_type})"

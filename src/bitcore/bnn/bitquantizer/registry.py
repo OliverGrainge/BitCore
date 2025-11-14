@@ -31,8 +31,6 @@ WEIGHT_QUANT_REGISTRY: Dict[str, QuantFn] = {
     "wpg64": partial(quantize_weight_wpg, group_size=64),
     "wpg128": partial(quantize_weight_wpg, group_size=128),
     "wpg256": partial(quantize_weight_wpg, group_size=256),
-    "wbf16": quantize_weight_wbf16,
-    "wf16": quantize_weight_wf16,
     "none": _identity_weight,
 }
 

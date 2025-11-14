@@ -15,7 +15,7 @@ def quantize_act_abf16(
     qx = x.to(torch.bfloat16)
     qx = qx.to(orig_dtype)
     # Return dummy inverse scale of 1.0 for API consistency
-    inv_scale = torch.tensor(1.0, dtype=torch.bfloat16, device=x.device)
+    inv_scale = torch.tensor(1.0, dtype=torch.float32, device=x.device)
     return inv_scale, qx
 
 
@@ -27,7 +27,7 @@ def quantize_act_af16(
     qx = x.to(torch.float16)
     qx = qx.to(orig_dtype)
     # Return dummy inverse scale of 1.0 for API consistency
-    inv_scale = torch.tensor(1.0, dtype=torch.float16, device=x.device)
+    inv_scale = torch.tensor(1.0, dtype=torch.float32, device=x.device)
     return inv_scale, qx
 
 

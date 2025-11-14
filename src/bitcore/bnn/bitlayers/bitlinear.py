@@ -1,7 +1,5 @@
 """Binary linear layer implementations with shared quantization utilities."""
 
-from typing import Optional
-
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -14,15 +12,17 @@ class BitLinear(BaseBitLayer):
     """
     A binary neural network linear layer that quantizes weights to {-1, 0, 1}.
 
-    This layer supports two modes:
-    1. Training mode: Uses quantized weights with gradient flow
-    2. Deployed mode: Uses packed quantized weights for efficient inference
+    This layer supports two execution modes:
+    - Training mode: Applies quantized weights while preserving gradient flow.
+    - Deployment mode: Swaps parameters for packed buffers and a lightweight
+      inference-only computation path.
 
     Args:
-        in_features: Number of input features
-        out_features: Number of output features
-        bias: Whether to include a bias term
-        eps: Small epsilon for numerical stability in quantization
+        in_features: Number of input features.
+        out_features: Number of output features.
+        bias: Whether to include a bias term.
+        eps: Small epsilon for numerical stability in quantization.
+        quant_type: Identifier for activation/weight quantization pair to use.
     """
 
     def __init__(
@@ -63,9 +63,25 @@ class BitLinear(BaseBitLayer):
         dqx, dqw = self.quantizer(x, self.weight)
         return F.linear(dqx, dqw, self.bias)
 
-    @classmethod 
-    def from_linear(cls, linear: nn.Linear, quant_type: str, eps: float = 1e-6) -> None: 
-        layer = cls(linear.in_features, linear.out_features, linear.bias is not None, eps, linear.quant_type)
+    @classmethod
+    def from_linear(cls, linear: nn.Linear, quant_type: str, eps: float = 1e-6) -> None:
+        """
+        Convert a floating-point linear layer into a `BitLinear` instance.
+
+        The resulting layer copies over trained weights/bias values and enables
+        quantization-aware execution using the provided quantizer configuration.
+
+        Args:
+            linear: Source `nn.Linear` module whose parameters should be cloned.
+            quant_type: Identifier describing the activation/weight quantization
+                flavors to adopt.
+            eps: Small epsilon safeguarding activation quantization operations.
+
+        Returns:
+            `BitLinear` instance initialized to mirror the supplied `linear`.
+        """
+        qt = getattr(linear, "quant_type", quant_type)
+        layer = cls(linear.in_features, linear.out_features, linear.bias is not None, eps, qt)
         layer.weight.data.copy_(linear.weight.data)
         if linear.bias is not None:
             layer.bias.data.copy_(linear.bias.data)
@@ -97,7 +113,37 @@ class BitLinear(BaseBitLayer):
         # Switch to optimized forward pass
         self.forward = self._deploy_forward
 
+    def _deploy(self) -> None:
+        """
+        Deploy the layer for efficient inference by:
+        1. Quantizing and packing weights (and bias)
+        2. Removing original parameters
+        3. Switching to optimized forward pass
+        """
+        # prepare_weights now handles both weights and bias
+        buffer_data = bitlinear.prepare_weights(
+            self.weight, 
+            self.bias,  # Pass bias to prepare_weights
+            self.eps, 
+            self.quant_type
+        )
+        
+        # Delete original parameters
+        del self.bias, self.weight
+
+        # Store the keys for later unpacking
+        self._buffer_keys = list(buffer_data.keys())
+        
+        # Register all tensors as buffers
+        for key, tensor in buffer_data.items():
+            self.register_buffer(key, tensor)
+
+        # Switch to optimized forward pass
+        self.forward = self._deploy_forward
+
     def _deploy_forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run the quantized inference pathway after `deploy` has packed the weights."""
-        return bitlinear(x, self.qws, self.qw, self.bias, self.eps, self.quant_type)
+        # Reconstruct all buffers
+        buffer_kwargs = {key: getattr(self, key) for key in self._buffer_keys}
+        return bitlinear(x, **buffer_kwargs, eps=self.eps, quant_type=self.quant_type)
 

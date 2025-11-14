@@ -131,3 +131,19 @@ def test_backward_eval_3d(bitlinear_layer):
         assert not torch.isnan(bitlinear_layer.bias.grad).any()
 
 
+def test_deploy_eval_equivalence_2d(bitlinear_layer): 
+    x = torch.randn(2, 12)
+    bitlinear_layer.eval()
+    y_eval = bitlinear_layer(x)
+    bitlinear_layer._deploy()
+    y_deploy = bitlinear_layer(x)
+    assert torch.allclose(y_eval, y_deploy)
+
+
+def test_deploy_eval_equivalence_3d(bitlinear_layer): 
+    x = torch.randn(2, 8, 12)
+    bitlinear_layer.eval()
+    y_eval = bitlinear_layer(x)
+    bitlinear_layer._deploy()
+    y_deploy = bitlinear_layer(x)
+    assert torch.allclose(y_eval, y_deploy)

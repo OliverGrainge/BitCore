@@ -93,25 +93,6 @@ class BitLinear(BaseBitLayer):
         if self.bias is not None:
             nn.init.zeros_(self.bias)
 
-    def _deploy(self) -> None:
-        """
-        Deploy the layer for efficient inference by:
-        1. Quantizing and packing weights
-        2. Removing original parameters
-        3. Switching to optimized forward pass
-        """
-        # Quantize and pack weights for deployment
-        qs, qw = bitlinear.prepare_weights(self.weight, self.eps, self.quant_type)
-        bias_data = self.bias.detach().clone() if self.bias is not None else None
-        del self.bias, self.weight
-
-        # Replace parameters with quantized buffers
-        self.register_buffer("qws", qs)
-        self.register_buffer("qw", qw)
-        self.register_buffer("bias", bias_data)
-
-        # Switch to optimized forward pass
-        self.forward = self._deploy_forward
 
     def _deploy(self) -> None:
         """

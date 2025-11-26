@@ -1,0 +1,2 @@
+torch>=1.9.0
+git+ssh://git@github.com/OliverGrainge/BitOps.git#subdirectory=python

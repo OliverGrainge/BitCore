@@ -1,16 +1,15 @@
-# bitlab-core
+# BitCore
 
-Core binary neural network components extracted from BitLab. This package contains the foundational `bitlab.bnn` layers and the quantization utilities previously available in `bitlab.bitquantizer`.
-
-## Getting Started
-
-```bash
-pip install git+https://github.com/<your-org>/bit-core.git
-```
-
-## Development
+BitCore provides quantization-aware binary linear layers that can swap into
+deployment mode using the accompanying `bitops` extension for efficient
+inference. Install in editable mode during development and use `BitLinear`
+from the package namespace:
 
 ```bash
-pip install -e .[dev]
-pytest
+pip install -e .
 ```
+
+```python
+from bitcore import BitLinear
+```
+

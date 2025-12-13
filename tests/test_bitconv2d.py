@@ -476,3 +476,5 @@ def test_bitconv2d_spatial_dimensions_gpu():
         assert y.shape == (2, 16, size, size)
         assert y.device.type == "cuda"
 
+
+

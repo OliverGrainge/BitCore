@@ -1,4 +1,4 @@
-"""Binary convolutional layer implementations with bitops quantization utilities."""
+"""Binary transposed convolutional layer implementations with bitops quantization utilities."""
 
 import torch
 from typing import Union, Tuple
@@ -23,20 +23,23 @@ def weight_quant(w):
     """
     Per-tensor quantization to 1.58 bits. No grouping is needed for quantization.
     Args:
-        w: a weight tensor with shape [out_channels, in_channels, kernel_h, kernel_w]
+        w: a weight tensor with shape [in_channels, out_channels, kernel_h, kernel_w]
     Returns:
-        u: a quantized weight with shape [out_channels, in_channels, kernel_h, kernel_w]
+        u: a quantized weight with shape [in_channels, out_channels, kernel_h, kernel_w]
     """
     scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
     u = (w * scale).round().clamp_(-1, 1) / scale
     return u
 
 
-class BitConv2d(nn.Module):
+class BitConvTranspose2d(nn.Module):
     """
-    A binary neural network convolutional layer that quantizes weights to {-1, 0, 1}.
+    A binary neural network transposed convolutional layer that quantizes weights to {-1, 0, 1}.
 
-    This layer applies quantized 2D convolution while preserving gradient flow during training.
+    This layer applies quantized 2D transposed convolution (also known as deconvolution) while 
+    preserving gradient flow during training. It's commonly used for upsampling in architectures 
+    like autoencoders, GANs, and segmentation networks.
+
     Currently, both training and deployment modes use the same execution path, as the
     optimized bitops kernel for convolutions is not yet implemented.
 
@@ -46,6 +49,7 @@ class BitConv2d(nn.Module):
         kernel_size: Size of the convolving kernel.
         stride: Stride of the convolution.
         padding: Padding added to both sides of the input.
+        output_padding: Additional size added to one side of each dimension in the output shape.
         dilation: Spacing between kernel elements.
         groups: Number of blocked connections from input channels to output channels.
         bias: Whether to include a bias term.
@@ -60,6 +64,7 @@ class BitConv2d(nn.Module):
         kernel_size: Union[int, Tuple[int, int]],
         stride: Union[int, Tuple[int, int]] = 1,
         padding: Union[int, Tuple[int, int]] = 0,
+        output_padding: Union[int, Tuple[int, int]] = 0,
         dilation: Union[int, Tuple[int, int]] = 1,
         groups: int = 1,
         bias: bool = True,
@@ -67,7 +72,7 @@ class BitConv2d(nn.Module):
         eps: float = 1e-6,
     ):
         """
-        Initialize a binary convolutional layer with learnable parameters.
+        Initialize a binary transposed convolutional layer with learnable parameters.
 
         Args:
             in_channels: Number of input channels.
@@ -75,6 +80,7 @@ class BitConv2d(nn.Module):
             kernel_size: Size of the convolving kernel (int or tuple).
             stride: Stride of the convolution (default: 1).
             padding: Zero-padding added to both sides (default: 0).
+            output_padding: Additional padding on output side (default: 0).
             dilation: Spacing between kernel elements (default: 1).
             groups: Number of blocked connections (default: 1).
             bias: Whether to include a learnable bias term (default: True).
@@ -88,14 +94,16 @@ class BitConv2d(nn.Module):
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
+        self.output_padding = output_padding if isinstance(output_padding, tuple) else (output_padding, output_padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.groups = groups
         self.padding_mode = padding_mode
         self.eps = eps
 
         # Initialize parameters
+        # Note: For ConvTranspose2d, weight shape is [in_channels, out_channels // groups, kernel_h, kernel_w]
         self.weight = nn.Parameter(
-            torch.zeros(out_channels, in_channels // groups, self.kernel_size[0], self.kernel_size[1])
+            torch.zeros(in_channels, out_channels // groups, self.kernel_size[0], self.kernel_size[1])
         )
         self.bias = nn.Parameter(torch.zeros(out_channels)) if bias else None
 
@@ -107,7 +115,7 @@ class BitConv2d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Apply quantization-aware convolutional transformation.
+        Apply quantization-aware transposed convolutional transformation.
         
         Args:
             x: Input tensor of shape [batch, in_channels, height, width]
@@ -117,25 +125,25 @@ class BitConv2d(nn.Module):
         """
         dqx = x - (x - activation_quant(x)).detach()
         dqw = self.weight - (self.weight - weight_quant(self.weight)).detach()
-        return F.conv2d(
+        return F.conv_transpose2d(
             dqx, dqw, self.bias,
-            self.stride, self.padding, self.dilation, self.groups
+            self.stride, self.padding, self.output_padding, self.groups, self.dilation
         )
 
     @classmethod
-    def from_conv2d(cls, conv: nn.Conv2d, eps: float = 1e-6) -> 'BitConv2d':
+    def from_conv_transpose2d(cls, conv: nn.ConvTranspose2d, eps: float = 1e-6) -> 'BitConvTranspose2d':
         """
-        Convert a floating-point Conv2d layer into a `BitConv2d` instance.
+        Convert a floating-point ConvTranspose2d layer into a `BitConvTranspose2d` instance.
 
         The resulting layer copies over trained weights/bias values and enables
         quantization-aware execution.
 
         Args:
-            conv: Source `nn.Conv2d` module whose parameters should be cloned.
+            conv: Source `nn.ConvTranspose2d` module whose parameters should be cloned.
             eps: Small epsilon safeguarding activation quantization operations.
 
         Returns:
-            `BitConv2d` instance initialized to mirror the supplied `conv`.
+            `BitConvTranspose2d` instance initialized to mirror the supplied `conv`.
         """
         layer = cls(
             conv.in_channels,
@@ -143,6 +151,7 @@ class BitConv2d(nn.Module):
             conv.kernel_size,
             conv.stride,
             conv.padding,
+            conv.output_padding,
             conv.dilation,
             conv.groups,
             conv.bias is not None,
@@ -155,7 +164,7 @@ class BitConv2d(nn.Module):
         return layer
 
     def _init_weights(self) -> None:
-        """Initialize weights using Kaiming uniform initialization (suitable for Conv2d)."""
+        """Initialize weights using Kaiming uniform initialization (suitable for ConvTranspose2d)."""
         nn.init.kaiming_uniform_(self.weight, a=0, mode='fan_in', nonlinearity='relu')
         if self.bias is not None:
             nn.init.zeros_(self.bias)
@@ -175,6 +184,5 @@ class BitConv2d(nn.Module):
         self._is_deployed = True
         # No parameter swapping yet - optimized kernel not implemented
         # self.forward remains unchanged
-
 
 

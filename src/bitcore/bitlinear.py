@@ -4,37 +4,12 @@ import torch
 from typing import Tuple
 from torch import nn
 import torch.nn.functional as F
+from .quantizers import get_quantizers
 
 try:
     import bitops
 except ImportError:
     raise ImportError("bitops is required for deployment. Install with: pip install -e .")
-
-
-def activation_quant(x):
-    """
-    Per-token quantization to 8 bits. No grouping is needed for quantization.
-    Args:
-        x: an activation tensor with shape [n, d]
-    Returns:
-        y: a quantized activation tensor with shape [n, d]
-    """
-    scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
-    y = (x * scale).round().clamp_(-128, 127) / scale
-    return y
-
-
-def weight_quant(w):
-    """
-    Per-tensor quantization to 1.58 bits. No grouping is needed for quantization.
-    Args:
-        w: a weight tensor with shape [d, k]
-    Returns:
-        u: a quantized weight with shape [d, k]
-    """
-    scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
-    u = (w * scale).round().clamp_(-1, 1) / scale
-    return u
 
 
 class BitLinear(nn.Module):
@@ -51,6 +26,7 @@ class BitLinear(nn.Module):
         out_features: Number of output features.
         bias: Whether to include a bias term.
         eps: Small epsilon for numerical stability in quantization.
+        quant_type: Quantization type identifier (e.g., "bitnet", "binary").
     """
 
     def __init__(
@@ -59,6 +35,7 @@ class BitLinear(nn.Module):
         out_features: int,
         bias: bool = True,
         eps: float = 1e-6,
+        quant_type: str = "bitnet",
     ):
         """
         Initialize a binary linear layer with learnable parameters and a quantizer.
@@ -68,12 +45,17 @@ class BitLinear(nn.Module):
             out_features: Number of output activations per sample.
             bias: Whether to include a learnable bias term.
             eps: Small constant added during quantization to avoid division by zero.
+            quant_type: Quantization type identifier (e.g., "bitnet", "binary").
         """
         super().__init__()
 
         self.in_features = in_features
         self.out_features = out_features
         self.eps = eps
+        self.quant_type = quant_type
+        
+        # Get quantization functions from registry
+        self.activation_quant, self.weight_quant = get_quantizers(quant_type)
 
         # Initialize parameters
         self.weight = nn.Parameter(torch.zeros(out_features, in_features))
@@ -87,12 +69,12 @@ class BitLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply quantization-aware linear transformation suitable for training."""
-        dqx = x - (x - activation_quant(x)).detach()
-        dqw = self.weight - (self.weight - weight_quant(self.weight)).detach()
+        dqx = x - (x - self.activation_quant(x)).detach()
+        dqw = self.weight - (self.weight - self.weight_quant(self.weight)).detach()
         return F.linear(dqx, dqw, self.bias)
 
     @classmethod
-    def from_linear(cls, linear: nn.Linear, quant_type: str, eps: float = 1e-6) -> 'BitLinear':
+    def from_linear(cls, linear: nn.Linear, quant_type: str = "bitnet", eps: float = 1e-6) -> 'BitLinear':
         """
         Convert a floating-point linear layer into a `BitLinear` instance.
 
@@ -101,15 +83,13 @@ class BitLinear(nn.Module):
 
         Args:
             linear: Source `nn.Linear` module whose parameters should be cloned.
-            quant_type: Identifier describing the activation/weight quantization
-                flavors to adopt.
+            quant_type: Quantization type identifier (e.g., "bitnet", "binary").
             eps: Small epsilon safeguarding activation quantization operations.
 
         Returns:
             `BitLinear` instance initialized to mirror the supplied `linear`.
         """
-        qt = getattr(linear, "quant_type", quant_type)
-        layer = cls(linear.in_features, linear.out_features, linear.bias is not None, eps)
+        layer = cls(linear.in_features, linear.out_features, linear.bias is not None, eps, quant_type)
         layer.weight.data.copy_(linear.weight.data)
         if linear.bias is not None:
             layer.bias.data.copy_(linear.bias.data)

@@ -22,7 +22,7 @@ def test_bitlinear_forward_cpu():
 def test_bitlinear_from_linear_clones_weights():
     torch.manual_seed(1)
     linear = nn.Linear(16, 16, bias=True)
-    bit_layer = BitLinear.from_linear(linear, quant_type="per_tensor")
+    bit_layer = BitLinear.from_linear(linear)
 
     assert torch.allclose(bit_layer.weight, linear.weight)
     assert bit_layer.bias is not None
@@ -292,7 +292,7 @@ def test_bitlinear_from_linear_no_bias():
     """Test from_linear with no bias."""
     torch.manual_seed(23)
     linear = nn.Linear(16, 32, bias=False)
-    bit_layer = BitLinear.from_linear(linear, quant_type="per_tensor")
+    bit_layer = BitLinear.from_linear(linear)
     
     assert torch.allclose(bit_layer.weight, linear.weight)
     assert bit_layer.bias is None

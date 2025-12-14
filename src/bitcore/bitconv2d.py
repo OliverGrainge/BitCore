@@ -4,32 +4,7 @@ import torch
 from typing import Union, Tuple
 from torch import nn
 import torch.nn.functional as F
-
-
-def activation_quant(x):
-    """
-    Per-token quantization to 8 bits. No grouping is needed for quantization.
-    Args:
-        x: an activation tensor with shape [n, c, h, w]
-    Returns:
-        y: a quantized activation tensor with shape [n, c, h, w]
-    """
-    scale = 127.0 / x.abs().max(dim=1, keepdim=True).values.clamp_(min=1e-5)
-    y = (x * scale).round().clamp_(-128, 127) / scale
-    return y
-
-
-def weight_quant(w):
-    """
-    Per-tensor quantization to 1.58 bits. No grouping is needed for quantization.
-    Args:
-        w: a weight tensor with shape [out_channels, in_channels, kernel_h, kernel_w]
-    Returns:
-        u: a quantized weight with shape [out_channels, in_channels, kernel_h, kernel_w]
-    """
-    scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
-    u = (w * scale).round().clamp_(-1, 1) / scale
-    return u
+from .quantizers import get_quantizers
 
 
 class BitConv2d(nn.Module):
@@ -51,6 +26,7 @@ class BitConv2d(nn.Module):
         bias: Whether to include a bias term.
         padding_mode: Padding mode ('zeros', 'reflect', 'replicate', 'circular').
         eps: Small epsilon for numerical stability in quantization.
+        quant_type: Quantization type identifier (e.g., "bitnet", "binary").
     """
 
     def __init__(
@@ -65,6 +41,7 @@ class BitConv2d(nn.Module):
         bias: bool = True,
         padding_mode: str = 'zeros',
         eps: float = 1e-6,
+        quant_type: str = "bitnet",
     ):
         """
         Initialize a binary convolutional layer with learnable parameters.
@@ -80,6 +57,7 @@ class BitConv2d(nn.Module):
             bias: Whether to include a learnable bias term (default: True).
             padding_mode: Padding mode (default: 'zeros').
             eps: Small constant for numerical stability (default: 1e-6).
+            quant_type: Quantization type identifier (e.g., "bitnet", "binary").
         """
         super().__init__()
 
@@ -92,6 +70,10 @@ class BitConv2d(nn.Module):
         self.groups = groups
         self.padding_mode = padding_mode
         self.eps = eps
+        self.quant_type = quant_type
+        
+        # Get quantization functions from registry
+        self.activation_quant, self.weight_quant = get_quantizers(quant_type)
 
         # Initialize parameters
         self.weight = nn.Parameter(
@@ -115,15 +97,15 @@ class BitConv2d(nn.Module):
         Returns:
             Output tensor of shape [batch, out_channels, out_height, out_width]
         """
-        dqx = x - (x - activation_quant(x)).detach()
-        dqw = self.weight - (self.weight - weight_quant(self.weight)).detach()
+        dqx = x - (x - self.activation_quant(x)).detach()
+        dqw = self.weight - (self.weight - self.weight_quant(self.weight)).detach()
         return F.conv2d(
             dqx, dqw, self.bias,
             self.stride, self.padding, self.dilation, self.groups
         )
 
     @classmethod
-    def from_conv2d(cls, conv: nn.Conv2d, eps: float = 1e-6) -> 'BitConv2d':
+    def from_conv2d(cls, conv: nn.Conv2d, eps: float = 1e-6, quant_type: str = "bitnet") -> 'BitConv2d':
         """
         Convert a floating-point Conv2d layer into a `BitConv2d` instance.
 
@@ -133,6 +115,7 @@ class BitConv2d(nn.Module):
         Args:
             conv: Source `nn.Conv2d` module whose parameters should be cloned.
             eps: Small epsilon safeguarding activation quantization operations.
+            quant_type: Quantization type identifier (e.g., "bitnet", "binary").
 
         Returns:
             `BitConv2d` instance initialized to mirror the supplied `conv`.
@@ -147,7 +130,8 @@ class BitConv2d(nn.Module):
             conv.groups,
             conv.bias is not None,
             conv.padding_mode,
-            eps
+            eps,
+            quant_type
         )
         layer.weight.data.copy_(conv.weight.data)
         if conv.bias is not None:

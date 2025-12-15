@@ -6,11 +6,6 @@ from torch import nn
 import torch.nn.functional as F
 from .quantizers import get_quantizers
 
-try:
-    import bitops
-except ImportError:
-    raise ImportError("bitops is required for deployment. Install with: pip install -e .")
-
 
 class BitLinear(nn.Module):
     """
@@ -54,14 +49,15 @@ class BitLinear(nn.Module):
         self.eps = eps
         self.quant_type = quant_type
         
-        # Get quantization functions from registry
-        self.activation_quant, self.weight_quant = get_quantizers(quant_type)
+        # Get quantizer class from registry and instantiate
+        quantizer_cls = get_quantizers(quant_type)
+        self.quantizer = quantizer_cls(out_features, in_features)
 
         # Initialize parameters
         self.weight = nn.Parameter(torch.zeros(out_features, in_features))
         self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
 
-        # Initialize weights and quantizer
+        # Initialize weights
         self._init_weights()
         
         # Flag to track deployment state
@@ -69,8 +65,8 @@ class BitLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply quantization-aware linear transformation suitable for training."""
-        dqx = x - (x - self.activation_quant(x)).detach()
-        dqw = self.weight - (self.weight - self.weight_quant(self.weight)).detach()
+        # Use quantizer to get dequantized activations and weights (with STE)
+        dqx, dqw = self.quantizer(x, self.weight)
         return F.linear(dqx, dqw, self.bias)
 
     @classmethod
@@ -103,11 +99,13 @@ class BitLinear(nn.Module):
 
     def _deploy(self) -> None:
         """
-        Deploy the layer for efficient inference using bitops by:
-        1. Quantizing weights to 2-bit {-1, 0, 1} using bitops.quant_t2spg
-        2. Packing entire weight tensor using bitops.pack_t2s for efficient storage
-        3. Removing original parameters
-        4. Switching to optimized forward pass
+        Deploy the layer for efficient inference using the quantizer's deployment API.
+        
+        This method:
+        1. Uses quantizer.get_deployment_weights() to prepare weights
+        2. Gets the appropriate inference function from quantizer.get_inference_fn()
+        3. Removes original parameters
+        4. Switches to optimized forward pass
         """
         if self._is_deployed:
             return
@@ -115,18 +113,8 @@ class BitLinear(nn.Module):
         # Get device for tensor creation
         device = self.weight.device
         
-        # Quantize weights to 2-bit using bitops (per-tensor quantization)
-        # group_size = total elements means single scale factor (per-tensor)
-        group_size = self.out_features * self.in_features
-        w_scale, w_quant = bitops.quant_t2spg(self.weight, group_size)
-        
-        # Pack the entire quantized weight tensor to 2-bit format
-        # Flatten first, pack, then reshape to maintain structure
-        w_quant_flat = w_quant.flatten()
-        w_packed_flat = bitops.pack_t2s(w_quant_flat)
-        # Reshape packed weights: each packed element contains 4 values (2-bit each in int8)
-        packed_per_row = (self.in_features + 3) // 4  # Ceiling division
-        w_packed = w_packed_flat.reshape(self.out_features, packed_per_row)
+        # Get deployment weights from quantizer (handles packing if bitops available)
+        w_scale, w_packed = self.quantizer.get_deployment_weights(self.weight)
         
         # Store bias if it exists, otherwise create zeros
         if self.bias is not None:
@@ -144,19 +132,22 @@ class BitLinear(nn.Module):
         self.register_buffer('w_packed', w_packed)
         self.register_buffer('bias_buffer', bias_data)
         
+        # Get inference function from quantizer
+        self.inference_fn = self.quantizer.get_inference_fn()
+        
         # Mark as deployed and switch forward method
         self._is_deployed = True
         self.forward = self._deploy_forward
 
     def _deploy_forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Run the quantized inference pathway using bitops matmul.
+        Run the quantized inference pathway using the quantizer's inference function.
         
-        Uses bitops.matmul_f32_i8spr_t2spt which:
-        - Quantizes input activations to int8 per-row
-        - Performs matrix multiplication with packed 2-bit weights (per-tensor scale)
-        - Adds bias
-        - Supports both 2D and 3D inputs natively
+        The inference function handles:
+        - Quantizing input activations appropriately
+        - Performing matrix multiplication with packed/quantized weights
+        - Adding bias
+        - Supporting both 2D and 3D inputs
         
         Args:
             x: Input tensor of shape [batch, in_features] or [batch, seq_len, in_features]
@@ -164,7 +155,7 @@ class BitLinear(nn.Module):
         Returns:
             Output tensor of shape [batch, out_features] or [batch, seq_len, out_features]
         """
-        return bitops.matmul_f32_i8spr_t2spt(
+        return self.inference_fn(
             x,
             self.w_scale,
             self.w_packed,

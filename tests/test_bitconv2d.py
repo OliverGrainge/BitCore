@@ -2,13 +2,17 @@ import pytest
 import torch
 from torch import nn
 
-from bitcore import BitConv2d
+from bitcore import BitConv2d, QUANTIZERS
+
+# Get all available quantizer types
+ALL_QUANTIZERS = list(QUANTIZERS.keys())
 
 
-def test_bitconv2d_forward_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_forward_cpu(quant_type):
     """Test basic forward pass on CPU."""
     torch.manual_seed(0)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     x = torch.randn(4, 8, 32, 32, requires_grad=True)
 
     y = layer(x)
@@ -31,10 +35,11 @@ def test_bitconv2d_from_conv2d_clones_weights():
     assert torch.allclose(bit_layer.bias, conv.bias)
 
 
-def test_bitconv2d_no_bias_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_no_bias_cpu(quant_type):
     """Test BitConv2d without bias."""
     torch.manual_seed(2)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, bias=False)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, bias=False, quant_type=quant_type)
     
     assert layer.bias is None
     
@@ -43,7 +48,8 @@ def test_bitconv2d_no_bias_cpu():
     assert y.shape == (4, 16, 32, 32)
 
 
-def test_bitconv2d_various_kernel_sizes_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_various_kernel_sizes_cpu(quant_type):
     """Test various kernel sizes (odd sizes for symmetric padding)."""
     test_configs = [
         (1, 0),  # 1x1 conv
@@ -58,14 +64,15 @@ def test_bitconv2d_various_kernel_sizes_cpu():
             out_channels=16,
             kernel_size=kernel_size,
             padding=padding
-        )
+        , quant_type=quant_type)
         x = torch.randn(2, 8, 32, 32)
         
         y = layer(x)
         assert y.shape == (2, 16, 32, 32), f"Failed for kernel_size={kernel_size}"
 
 
-def test_bitconv2d_stride_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_stride_cpu(quant_type):
     """Test various stride configurations."""
     test_configs = [
         (1, 32),  # stride 1, same size
@@ -81,14 +88,15 @@ def test_bitconv2d_stride_cpu():
             kernel_size=3,
             stride=stride,
             padding=1
-        )
+        , quant_type=quant_type)
         x = torch.randn(2, 8, 32, 32)
         
         y = layer(x)
         assert y.shape == (2, 16, expected_size, expected_size), f"Failed for stride={stride}"
 
 
-def test_bitconv2d_various_channel_dimensions_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_various_channel_dimensions_cpu(quant_type):
     """Test various channel dimensions (all divisible by 4)."""
     test_configs = [
         (4, 8),
@@ -104,7 +112,7 @@ def test_bitconv2d_various_channel_dimensions_cpu():
             out_channels=out_channels,
             kernel_size=3,
             padding=1
-        )
+        , quant_type=quant_type)
         x = torch.randn(2, in_channels, 16, 16)
         
         y = layer(x)
@@ -112,10 +120,11 @@ def test_bitconv2d_various_channel_dimensions_cpu():
             f"Failed for {in_channels}x{out_channels}"
 
 
-def test_bitconv2d_batch_dimensions_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_batch_dimensions_cpu(quant_type):
     """Test different batch dimensions."""
     torch.manual_seed(13)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     
     for batch_size in [1, 4, 8, 16]:
         x = torch.randn(batch_size, 8, 32, 32)
@@ -123,12 +132,13 @@ def test_bitconv2d_batch_dimensions_cpu():
         assert y.shape == (batch_size, 16, 32, 32)
 
 
-def test_bitconv2d_spatial_dimensions_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_spatial_dimensions_cpu(quant_type):
     """Test various spatial dimensions (all divisible by 4)."""
     spatial_sizes = [4, 8, 16, 32, 64]
     
     torch.manual_seed(14)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     
     for size in spatial_sizes:
         x = torch.randn(2, 8, size, size)
@@ -136,10 +146,11 @@ def test_bitconv2d_spatial_dimensions_cpu():
         assert y.shape == (2, 16, size, size), f"Failed for spatial size {size}x{size}"
 
 
-def test_bitconv2d_rectangular_input_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_rectangular_input_cpu(quant_type):
     """Test non-square input dimensions."""
     torch.manual_seed(15)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     
     x = torch.randn(2, 8, 16, 32)  # height=16, width=32
     y = layer(x)
@@ -147,10 +158,11 @@ def test_bitconv2d_rectangular_input_cpu():
     assert y.shape == (2, 16, 16, 32)
 
 
-def test_bitconv2d_gradient_flow_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_gradient_flow_cpu(quant_type):
     """Test that gradients flow properly through quantization."""
     torch.manual_seed(16)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     x = torch.randn(4, 8, 16, 16, requires_grad=True)
     
     y = layer(x)
@@ -162,10 +174,11 @@ def test_bitconv2d_gradient_flow_cpu():
     assert layer.bias.grad is not None
 
 
-def test_bitconv2d_training_vs_eval_mode_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_training_vs_eval_mode_cpu(quant_type):
     """Test that training and eval modes produce consistent behavior."""
     torch.manual_seed(17)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     x = torch.randn(4, 8, 32, 32)
     
     # Training mode
@@ -184,10 +197,11 @@ def test_bitconv2d_training_vs_eval_mode_cpu():
     assert max_diff < 1.0
 
 
-def test_bitconv2d_multiple_forward_passes_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_multiple_forward_passes_cpu(quant_type):
     """Test multiple forward passes with same layer."""
     torch.manual_seed(18)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     
     for i in range(5):
         x = torch.randn(4, 8, 32, 32)
@@ -195,10 +209,11 @@ def test_bitconv2d_multiple_forward_passes_cpu():
         assert y.shape == (4, 16, 32, 32)
 
 
-def test_bitconv2d_deploy_mode_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_deploy_mode_cpu(quant_type):
     """Test deploy mode (currently same as eval)."""
     torch.manual_seed(19)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     x = torch.randn(4, 8, 32, 32)
     
     layer.eval()
@@ -241,7 +256,8 @@ def test_bitconv2d_from_conv2d_stride_padding():
     assert y_bit.shape == y_conv.shape
 
 
-def test_bitconv2d_groups_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_groups_cpu(quant_type):
     """Test grouped convolution."""
     torch.manual_seed(22)
     # 8 input channels, 16 output channels, groups=4
@@ -252,14 +268,15 @@ def test_bitconv2d_groups_cpu():
         kernel_size=3,
         padding=1,
         groups=4
-    )
+    , quant_type=quant_type)
     x = torch.randn(2, 8, 16, 16)
     
     y = layer(x)
     assert y.shape == (2, 16, 16, 16)
 
 
-def test_bitconv2d_dilation_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_dilation_cpu(quant_type):
     """Test dilated convolution."""
     torch.manual_seed(23)
     layer = BitConv2d(
@@ -268,17 +285,18 @@ def test_bitconv2d_dilation_cpu():
         kernel_size=3,
         padding=2,
         dilation=2
-    )
+    , quant_type=quant_type)
     x = torch.randn(2, 8, 32, 32)
     
     y = layer(x)
     assert y.shape == (2, 16, 32, 32)
 
 
-def test_bitconv2d_deploy_idempotent_cpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitconv2d_deploy_idempotent_cpu(quant_type):
     """Test that calling _deploy multiple times is safe."""
     torch.manual_seed(24)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type)
     x = torch.randn(4, 8, 32, 32)
     
     layer._deploy()
@@ -301,7 +319,7 @@ def test_bitconv2d_forward_gpu():
     """Test basic forward pass on GPU."""
     torch.manual_seed(30)
     device = torch.device("cuda")
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1).to(device)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type).to(device)
     x = torch.randn(4, 8, 32, 32, device=device, requires_grad=True)
 
     y = layer(x)
@@ -331,7 +349,7 @@ def test_bitconv2d_various_kernel_sizes_gpu():
             out_channels=16,
             kernel_size=kernel_size,
             padding=padding
-        ).to(device)
+        , quant_type=quant_type).to(device)
         x = torch.randn(2, 8, 32, 32, device=device)
         
         y = layer(x)
@@ -357,7 +375,7 @@ def test_bitconv2d_stride_gpu():
             kernel_size=3,
             stride=stride,
             padding=1
-        ).to(device)
+        , quant_type=quant_type).to(device)
         x = torch.randn(2, 8, 32, 32, device=device)
         
         y = layer(x)
@@ -370,7 +388,7 @@ def test_bitconv2d_batch_dimensions_gpu():
     """Test different batch dimensions on GPU."""
     device = torch.device("cuda")
     torch.manual_seed(33)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1).to(device)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type).to(device)
     
     for batch_size in [1, 4, 8, 16]:
         x = torch.randn(batch_size, 8, 32, 32, device=device)
@@ -390,7 +408,7 @@ def test_bitconv2d_no_bias_gpu():
         kernel_size=3,
         padding=1,
         bias=False
-    ).to(device)
+    , quant_type=quant_type).to(device)
     
     assert layer.bias is None
     
@@ -405,7 +423,7 @@ def test_bitconv2d_deploy_mode_gpu():
     """Test deploy mode on GPU."""
     device = torch.device("cuda")
     torch.manual_seed(35)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1).to(device)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type).to(device)
     x = torch.randn(4, 8, 32, 32, device=device)
     
     layer._deploy()
@@ -427,7 +445,7 @@ def test_bitconv2d_groups_gpu():
         kernel_size=3,
         padding=1,
         groups=4
-    ).to(device)
+    , quant_type=quant_type).to(device)
     x = torch.randn(2, 8, 16, 16, device=device)
     
     y = layer(x)
@@ -453,7 +471,7 @@ def test_bitconv2d_various_channel_dimensions_gpu():
             out_channels=out_channels,
             kernel_size=3,
             padding=1
-        ).to(device)
+        , quant_type=quant_type).to(device)
         x = torch.randn(2, in_channels, 16, 16, device=device)
         
         y = layer(x)
@@ -468,7 +486,7 @@ def test_bitconv2d_spatial_dimensions_gpu():
     spatial_sizes = [4, 8, 16, 32, 64]
     
     torch.manual_seed(38)
-    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1).to(device)
+    layer = BitConv2d(in_channels=8, out_channels=16, kernel_size=3, padding=1, quant_type=quant_type).to(device)
     
     for size in spatial_sizes:
         x = torch.randn(2, 8, size, size, device=device)

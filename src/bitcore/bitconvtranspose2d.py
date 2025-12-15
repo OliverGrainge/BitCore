@@ -79,8 +79,13 @@ class BitConvTranspose2d(nn.Module):
         self.eps = eps
         self.quant_type = quant_type
         
-        # Get quantization functions from registry
-        self.activation_quant, self.weight_quant = get_quantizers(quant_type)
+        # Get quantizer class from registry and instantiate
+        # For transpose conv layers, weight shape is [in_channels, out_channels // groups, kernel_h, kernel_w]
+        # Treat as having in_channels output features and (out_channels // groups) * k_h * k_w input features per filter
+        weight_out_features = in_channels
+        weight_in_features = (out_channels // groups) * self.kernel_size[0] * self.kernel_size[1]
+        quantizer_cls = get_quantizers(quant_type)
+        self.quantizer = quantizer_cls(weight_out_features, weight_in_features)
 
         # Initialize parameters
         # Note: For ConvTranspose2d, weight shape is [in_channels, out_channels // groups, kernel_h, kernel_w]
@@ -105,8 +110,8 @@ class BitConvTranspose2d(nn.Module):
         Returns:
             Output tensor of shape [batch, out_channels, out_height, out_width]
         """
-        dqx = x - (x - self.activation_quant(x)).detach()
-        dqw = self.weight - (self.weight - self.weight_quant(self.weight)).detach()
+        # Use quantizer to get dequantized activations and weights (with STE)
+        dqx, dqw = self.quantizer(x, self.weight)
         return F.conv_transpose2d(
             dqx, dqw, self.bias,
             self.stride, self.padding, self.output_padding, self.groups, self.dilation

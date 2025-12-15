@@ -72,8 +72,12 @@ class BitConv2d(nn.Module):
         self.eps = eps
         self.quant_type = quant_type
         
-        # Get quantization functions from registry
-        self.activation_quant, self.weight_quant = get_quantizers(quant_type)
+        # Get quantizer class from registry and instantiate
+        # For conv layers, treat flattened weight dimensions
+        weight_out_features = out_channels
+        weight_in_features = (in_channels // groups) * self.kernel_size[0] * self.kernel_size[1]
+        quantizer_cls = get_quantizers(quant_type)
+        self.quantizer = quantizer_cls(weight_out_features, weight_in_features)
 
         # Initialize parameters
         self.weight = nn.Parameter(
@@ -97,8 +101,8 @@ class BitConv2d(nn.Module):
         Returns:
             Output tensor of shape [batch, out_channels, out_height, out_width]
         """
-        dqx = x - (x - self.activation_quant(x)).detach()
-        dqw = self.weight - (self.weight - self.weight_quant(self.weight)).detach()
+        # Use quantizer to get dequantized activations and weights (with STE)
+        dqx, dqw = self.quantizer(x, self.weight)
         return F.conv2d(
             dqx, dqw, self.bias,
             self.stride, self.padding, self.dilation, self.groups

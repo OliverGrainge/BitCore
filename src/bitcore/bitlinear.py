@@ -65,7 +65,16 @@ class BitLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply quantization-aware linear transformation suitable for training."""
-        # Use quantizer to get dequantized activations and weights (with STE)
+        # In eval mode with no_grad, use deploy computation path to match deploy mode exactly
+        # This ensures eval and deploy produce identical results
+        if not self.training and not torch.is_grad_enabled():
+            # Use deploy computation path for exact match with deploy mode
+            w_scale, w_packed = self.quantizer.get_deployment_weights(self.weight)
+            inference_fn = self.quantizer.get_inference_fn()
+            bias_data = self.bias if self.bias is not None else torch.zeros(self.out_features, dtype=torch.float32, device=x.device)
+            return inference_fn(x, w_scale, w_packed, bias_data)
+        
+        # Training mode: Use quantizer to get dequantized activations and weights (with STE)
         dqx, dqw = self.quantizer(x, self.weight)
         return F.linear(dqx, dqw, self.bias)
 

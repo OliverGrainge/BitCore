@@ -72,8 +72,9 @@ class Quantizer(nn.Module):
 #==========================================================================
 
 class BitNetQuantizer(Quantizer): 
-    def __init__(self, out_features: int, in_features: int):
+    def __init__(self, out_features: int, in_features: int, use_fallback: bool = False):
         super().__init__(out_features, in_features)
+        self.use_fallback = use_fallback
 
     def _quantize_act(self, x: torch.Tensor) -> torch.Tensor:
         dim = 1 if x.dim() == 4 else -1  # channels for conv, features for linear
@@ -91,12 +92,21 @@ class BitNetQuantizer(Quantizer):
         w_inv_scale, w_quant = self._quantize_weight(w)
         x_dequant = x_quant / x_inv_scale
         w_dequant = w_quant / w_inv_scale
+        # Use STE for training, but in eval mode (no_grad) we want exact quantization behavior
+        # to match deploy mode. The detach() ensures gradients don't flow through quantization.
         x_dequant_ste = x + (x_dequant - x).detach()
         w_dequant_ste = w + (w_dequant - w).detach()
         return x_dequant_ste, w_dequant_ste
         
     def get_deployment_weights(self, weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        if HAS_BITOPS: 
+        # Use fallback format if explicitly requested or if bitops is not available
+        if self.use_fallback or not HAS_BITOPS:
+            w_inv_scale, w_quant = self._quantize_weight(weight)
+            # Convert inv_scale to actual scale for fallback
+            w_scale = (1.0 / w_inv_scale).reshape(1).to(torch.float32)
+            w_quant = w_quant.to(torch.float32)
+            return w_scale, w_quant
+        else:
             w_inv_scale, w_quant = self._quantize_weight(weight)
             # Convert inv_scale to actual scale for deployment (bitops expects scale, not inv_scale)
             w_scale = (1.0 / w_inv_scale).reshape(1).to(torch.float32)
@@ -106,22 +116,20 @@ class BitNetQuantizer(Quantizer):
             packed_per_row = (self.in_features + 3) // 4  # Ceiling division
             w_packed = w_packed_flat.reshape(self.out_features, packed_per_row)
             return w_scale, w_packed
-        else:
-            w_inv_scale, w_quant = self._quantize_weight(weight)
-            # Convert inv_scale to actual scale for fallback
-            w_scale = (1.0 / w_inv_scale).reshape(1).to(torch.float32)
-            w_quant = w_quant.to(torch.float32)
-            return w_scale, w_quant
 
     def get_inference_fn(self) -> Callable:
-        if HAS_BITOPS:
-            return bitops.matmul_f32_i8spr_t2spt
-        else:
+        if self.use_fallback or not HAS_BITOPS:
             return self._fallback_inference_fn
-
+        else:
+            return self._bitops_inference_fn
+    
+    def _bitops_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_packed: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        # Bitops quantizes activations internally
+        return bitops.matmul_f32_i8spr_t2spt(x, w_scale, w_packed, bias)
+    
     def _fallback_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_quant: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
         # w_scale here is the actual scale (from get_deployment_weights)
-        # Quantize activations
+        # Quantize activations using the same method as forward
         x_inv_scale, x_quant = self._quantize_act(x)
         x_dequant = x_quant / x_inv_scale
         w_dequant = w_quant * w_scale
@@ -132,8 +140,9 @@ class BitNetQuantizer(Quantizer):
 #==========================================================================
 
 class TWNQuantizer(Quantizer): 
-    def __init__(self, out_features: int, in_features: int):
+    def __init__(self, out_features: int, in_features: int, use_fallback: bool = False):
         super().__init__(out_features, in_features)
+        self.use_fallback = use_fallback
 
     def _quantize_act(self, x: torch.Tensor) -> torch.Tensor:
         dim = 1 if x.dim() == 4 else -1  # channels for conv, features for linear
@@ -175,7 +184,14 @@ class TWNQuantizer(Quantizer):
         return x_dequant_ste, w_dequant_ste
         
     def get_deployment_weights(self, weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        if HAS_BITOPS: 
+        # Use fallback format if explicitly requested or if bitops is not available
+        if self.use_fallback or not HAS_BITOPS:
+            w_scale, w_quant = self._quantize_weight(weight)
+            # Ensure w_scale is at least 1D for consistency
+            w_scale = w_scale.reshape(1).to(torch.float32)
+            w_quant = w_quant.to(torch.float32)
+            return w_scale, w_quant
+        else:
             w_scale, w_quant = self._quantize_weight(weight)
             w_quant = w_quant.to(torch.int8)
             # Ensure w_scale is at least 1D (bitops expects [1] shape for per-tensor scale)
@@ -185,22 +201,20 @@ class TWNQuantizer(Quantizer):
             packed_per_row = (self.in_features + 3) // 4  # Ceiling division
             w_packed = w_packed_flat.reshape(self.out_features, packed_per_row)
             return w_scale, w_packed
-        else:
-            w_scale, w_quant = self._quantize_weight(weight)
-            # Ensure w_scale is at least 1D for consistency
-            w_scale = w_scale.reshape(1).to(torch.float32)
-            w_quant = w_quant.to(torch.float32)
-            return w_scale, w_quant
 
     def get_inference_fn(self) -> Callable:
-        if HAS_BITOPS:
-            return bitops.matmul_f32_i8spr_t2spt
-        else:
+        if self.use_fallback or not HAS_BITOPS:
             return self._fallback_inference_fn
-
+        else:
+            return self._bitops_inference_fn
+    
+    def _bitops_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_packed: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        # Bitops quantizes activations internally
+        return bitops.matmul_f32_i8spr_t2spt(x, w_scale, w_packed, bias)
+    
     def _fallback_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_quant: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
         # w_scale here is the actual scale (from get_deployment_weights)
-        # TWNQuantizer returns actual scale, so multiply to dequantize
+        # TWNQuantizer uses scale (not inv_scale) for activations
         x_scale, x_quant = self._quantize_act(x)
         x_dequant = x_quant * x_scale
         w_dequant = w_quant * w_scale

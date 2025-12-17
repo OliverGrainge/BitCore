@@ -4,7 +4,7 @@ import torch
 from typing import Tuple
 from torch import nn
 import torch.nn.functional as F
-from .quantizers import get_quantizers
+from .quantizer import get_quantizers
 
 
 class BitLinear(nn.Module):
@@ -21,7 +21,7 @@ class BitLinear(nn.Module):
         out_features: Number of output features.
         bias: Whether to include a bias term.
         eps: Small epsilon for numerical stability in quantization.
-        quant_type: Quantization type identifier (e.g., "bitnet", "binary").
+        quant_type: Quantization type identifier (e.g., "bitnet", "twn", "paretoq").
     """
 
     def __init__(
@@ -40,7 +40,7 @@ class BitLinear(nn.Module):
             out_features: Number of output activations per sample.
             bias: Whether to include a learnable bias term.
             eps: Small constant added during quantization to avoid division by zero.
-            quant_type: Quantization type identifier (e.g., "bitnet", "binary").
+            quant_type: Quantization type identifier (e.g., "bitnet", "twn", "paretoq").
         """
         super().__init__()
 
@@ -88,7 +88,7 @@ class BitLinear(nn.Module):
 
         Args:
             linear: Source `nn.Linear` module whose parameters should be cloned.
-            quant_type: Quantization type identifier (e.g., "bitnet", "binary").
+            quant_type: Quantization type identifier (e.g., "bitnet", "twn", "paretoq").
             eps: Small epsilon safeguarding activation quantization operations.
 
         Returns:

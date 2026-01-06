@@ -67,7 +67,8 @@ def test_bitlinear_eval_vs_deploy_cpu_equivalence(quant_type):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_forward_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_forward_gpu(quant_type):
     torch.manual_seed(3)
     device = torch.device("cuda")
     layer = BitLinear(in_features=16, out_features=32, quant_type=quant_type).to(device)
@@ -84,7 +85,8 @@ def test_bitlinear_forward_gpu():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_eval_vs_deploy_gpu_equivalence():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_eval_vs_deploy_gpu_equivalence(quant_type):
     torch.manual_seed(5)
     device = torch.device("cuda")
     layer = BitLinear(in_features=16, out_features=16, bias=True, quant_type=quant_type).to(device)
@@ -213,7 +215,7 @@ def test_bitlinear_training_vs_eval_mode_cpu(quant_type):
     # Shapes should match
     assert y_train.shape == y_eval.shape == (4, 16)
     # Outputs should be similar but may differ slightly
-    max_diff = (y_train - y_eval).abs().max().item()
+    max_diff = (y_train - y_eval).abs().max().detach().item()
     assert max_diff < 1.0  # Allow reasonable difference
 
 
@@ -336,7 +338,8 @@ def test_bitlinear_deploy_idempotent_cpu(quant_type):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_various_dimensions_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_various_dimensions_gpu(quant_type):
     """Test various dimension combinations on GPU (all divisible by 4)."""
     device = torch.device("cuda")
     test_configs = [
@@ -358,7 +361,8 @@ def test_bitlinear_various_dimensions_gpu():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_batch_dimensions_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_batch_dimensions_gpu(quant_type):
     """Test different batch dimensions on GPU."""
     device = torch.device("cuda")
     torch.manual_seed(31)
@@ -372,7 +376,8 @@ def test_bitlinear_batch_dimensions_gpu():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_3d_input_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_3d_input_gpu(quant_type):
     """Test 3D input on GPU."""
     device = torch.device("cuda")
     torch.manual_seed(32)
@@ -386,7 +391,8 @@ def test_bitlinear_3d_input_gpu():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_no_bias_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_no_bias_gpu(quant_type):
     """Test BitLinear without bias on GPU."""
     device = torch.device("cuda")
     torch.manual_seed(33)
@@ -401,7 +407,8 @@ def test_bitlinear_no_bias_gpu():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_deploy_forward_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_deploy_forward_gpu(quant_type):
     """Test deploy mode on GPU."""
     device = torch.device("cuda")
     torch.manual_seed(34)
@@ -417,7 +424,8 @@ def test_bitlinear_deploy_forward_gpu():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_eval_vs_deploy_various_dims_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_eval_vs_deploy_various_dims_gpu(quant_type):
     """Test eval vs deploy equivalence for various dimensions on GPU."""
     device = torch.device("cuda")
     test_configs = [
@@ -451,7 +459,8 @@ def test_bitlinear_eval_vs_deploy_various_dims_gpu():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_eval_vs_deploy_no_bias_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_eval_vs_deploy_no_bias_gpu(quant_type):
     """Test eval vs deploy equivalence without bias on GPU."""
     device = torch.device("cuda")
     torch.manual_seed(41)
@@ -473,7 +482,8 @@ def test_bitlinear_eval_vs_deploy_no_bias_gpu():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_bitlinear_eval_vs_deploy_3d_input_gpu():
+@pytest.mark.parametrize("quant_type", ALL_QUANTIZERS)
+def test_bitlinear_eval_vs_deploy_3d_input_gpu(quant_type):
     """Test eval vs deploy equivalence with 3D input on GPU."""
     device = torch.device("cuda")
     torch.manual_seed(42)

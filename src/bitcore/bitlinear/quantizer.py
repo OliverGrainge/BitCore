@@ -76,22 +76,36 @@ class BitNetQuantizer(Quantizer):
         super().__init__(out_features, in_features)
         self.use_fallback = use_fallback
 
-    def _quantize_act(self, x: torch.Tensor) -> torch.Tensor:
+    def _quantize_act(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Quantize activations to int8.
+        
+        Returns:
+            Tuple of (scale, quantized_activations)
+            where scale is per-row and quantized is int8 in [-128, 127]
+        """
         # For linear layers, quantize over the last dimension (features)
-        inv_scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
-        y = (x * inv_scale).round().clamp_(-128, 127)
-        return inv_scale, y
+        max_val = x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
+        scale = max_val / 127.0
+        y = (x / scale).round().clamp_(-128, 127)
+        return scale, y
 
-    def _quantize_weight(self, w: torch.Tensor) -> torch.Tensor: 
-        inv_scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
-        u = (w * inv_scale).round().clamp_(-1, 1) 
-        return inv_scale, u
+    def _quantize_weight(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: 
+        """
+        Quantize weights to ternary {-1, 0, 1}.
+        
+        Returns:
+            Tuple of (scale, quantized_weights) - scale is per-tensor (scalar)
+        """
+        scale = w.abs().mean().clamp_(min=1e-5)
+        u = (w / scale).round().clamp_(-1, 1) 
+        return scale, u
     
     def forward(self, x: torch.Tensor, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        x_inv_scale, x_quant = self._quantize_act(x)
-        w_inv_scale, w_quant = self._quantize_weight(w)
-        x_dequant = x_quant / x_inv_scale
-        w_dequant = w_quant / w_inv_scale
+        x_scale, x_quant = self._quantize_act(x)
+        w_scale, w_quant = self._quantize_weight(w)
+        x_dequant = x_quant * x_scale
+        w_dequant = w_quant * w_scale
         # Use STE for training, but in eval mode (no_grad) we want exact quantization behavior
         # to match deploy mode. The detach() ensures gradients don't flow through quantization.
         x_dequant_ste = x + (x_dequant - x).detach()
@@ -101,21 +115,19 @@ class BitNetQuantizer(Quantizer):
     def get_deployment_weights(self, weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # Use fallback format if explicitly requested or if bitops is not available
         if self.use_fallback or not HAS_BITOPS:
-            w_inv_scale, w_quant = self._quantize_weight(weight)
-            # Convert inv_scale to actual scale for fallback
-            w_scale = (1.0 / w_inv_scale).reshape(1).to(torch.float32)
+            w_scale, w_quant = self._quantize_weight(weight)
+            w_scale = w_scale.reshape(1).to(torch.float32)
             w_quant = w_quant.to(torch.float32)
             return w_scale, w_quant
         else:
-            w_inv_scale, w_quant = self._quantize_weight(weight)
-            # Convert inv_scale to actual scale for deployment (bitops expects scale, not inv_scale)
-            w_scale = (1.0 / w_inv_scale).reshape(1).to(torch.float32)
+            w_scale, w_quant = self._quantize_weight(weight)
             w_quant = w_quant.to(torch.int8)
-            w_quant_flat = w_quant.flatten() 
-            w_packed_flat = bitops.pack_t2s(w_quant_flat)
-            packed_per_row = (self.in_features + 3) // 4  # Ceiling division
-            w_packed = w_packed_flat.reshape(self.out_features, packed_per_row)
-            return w_scale, w_packed
+            # bitops expects w_scale as [N] (per output channel)
+            # For per-tensor quantization, broadcast scalar to all channels
+            w_scale_vec = w_scale.expand(self.out_features).contiguous().to(torch.float32)
+            # Use new bitops packing function
+            w_packed = bitops.bitmatmulpack(w_quant)
+            return w_scale_vec, w_packed
 
     def get_inference_fn(self) -> Callable:
         if self.use_fallback or not HAS_BITOPS:
@@ -124,14 +136,45 @@ class BitNetQuantizer(Quantizer):
             return self._bitops_inference_fn
     
     def _bitops_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_packed: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
-        # Bitops quantizes activations internally
-        return bitops.matmul_f32_i8spr_t2spt(x, w_scale, w_packed, bias)
+        """
+        Bitops inference with dynamic activation quantization.
+        
+        The bitops API requires:
+        - x: int8 quantized activations [M, K]
+        - x_scale: float32 per-row scales [M]
+        - w_packed: packed ternary weights [N, K/4]
+        - w_scale: float32 per-channel scales [N]
+        - bias: float32 bias [N]
+        """
+        original_shape = x.shape
+        # Handle 3D input (batch, seq_len, features)
+        if x.dim() == 3:
+            batch, seq_len, features = x.shape
+            x = x.reshape(batch * seq_len, features)
+        
+        M = x.shape[0]
+        
+        # Quantize activations to int8 with per-row scales
+        x_scale, x_quant = self._quantize_act(x)
+        x_quant = x_quant.to(torch.int8)
+        # x_scale is [M, 1], bitops expects [M]
+        x_scale = x_scale.squeeze(-1).to(torch.float32)
+        
+        # Call bitops with pre-quantized activations
+        # Signature: bitmatmul(x, x_scale, w_packed, w_scale, bias)
+        y = bitops.bitmatmul(x_quant, x_scale, w_packed, w_scale, bias)
+        
+        # Restore original shape if needed
+        if len(original_shape) == 3:
+            y = y.reshape(batch, seq_len, -1)
+        
+        return y
     
     def _fallback_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_quant: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
-        # w_scale here is the actual scale (from get_deployment_weights)
         # Quantize activations using the same method as forward
-        x_inv_scale, x_quant = self._quantize_act(x)
-        x_dequant = x_quant / x_inv_scale
+        x_scale, x_quant = self._quantize_act(x)
+        x_dequant = x_quant * x_scale
+        # w_scale is [1] for fallback, broadcast works naturally
         w_dequant = w_quant * w_scale
         return F.linear(x_dequant, w_dequant, bias)
     
@@ -144,14 +187,28 @@ class TWNQuantizer(Quantizer):
         super().__init__(out_features, in_features)
         self.use_fallback = use_fallback
 
-    def _quantize_act(self, x: torch.Tensor) -> torch.Tensor:
+    def _quantize_act(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Quantize activations to int8.
+        
+        Returns:
+            Tuple of (scale, quantized_activations)
+            where scale is per-row and quantized is int8 in [-128, 127]
+        """
         # For linear layers, quantize over the last dimension (features)
         max_val = x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
         scale = max_val / 127.0
         y = (x / scale).round().clamp_(-128, 127)
         return scale, y
 
-    def _quantize_weight(self, w: torch.Tensor) -> torch.Tensor:
+    def _quantize_weight(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        TWN (Ternary Weight Networks) quantization.
+        threshold Δ ≈ 0.75 E[|W|], scale α = mean(|W_i|) over non-zero entries
+        
+        Returns:
+            Tuple of (scale, quantized_weights) - scale is per-tensor (scalar)
+        """
         # threshold Δ ≈ 0.75 E[|W|]
         delta = 0.75 * w.abs().mean().clamp(min=1e-5)
 
@@ -171,7 +228,6 @@ class TWNQuantizer(Quantizer):
         w_ternary[w > delta] = 1.0
         w_ternary[w < -delta] = -1.0
 
-        # scaled ternary weights
         return scale, w_ternary
 
     def forward(self, x: torch.Tensor, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -187,20 +243,18 @@ class TWNQuantizer(Quantizer):
         # Use fallback format if explicitly requested or if bitops is not available
         if self.use_fallback or not HAS_BITOPS:
             w_scale, w_quant = self._quantize_weight(weight)
-            # Ensure w_scale is at least 1D for consistency
             w_scale = w_scale.reshape(1).to(torch.float32)
             w_quant = w_quant.to(torch.float32)
             return w_scale, w_quant
         else:
             w_scale, w_quant = self._quantize_weight(weight)
             w_quant = w_quant.to(torch.int8)
-            # Ensure w_scale is at least 1D (bitops expects [1] shape for per-tensor scale)
-            w_scale = w_scale.reshape(1).to(torch.float32)
-            w_quant_flat = w_quant.flatten() 
-            w_packed_flat = bitops.pack_t2s(w_quant_flat)
-            packed_per_row = (self.in_features + 3) // 4  # Ceiling division
-            w_packed = w_packed_flat.reshape(self.out_features, packed_per_row)
-            return w_scale, w_packed
+            # bitops expects w_scale as [N] (per output channel)
+            # For per-tensor quantization, broadcast scalar to all channels
+            w_scale_vec = w_scale.expand(self.out_features).contiguous().to(torch.float32)
+            # Use new bitops packing function
+            w_packed = bitops.bitmatmulpack(w_quant)
+            return w_scale_vec, w_packed
 
     def get_inference_fn(self) -> Callable:
         if self.use_fallback or not HAS_BITOPS:
@@ -209,14 +263,44 @@ class TWNQuantizer(Quantizer):
             return self._bitops_inference_fn
     
     def _bitops_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_packed: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
-        # Bitops quantizes activations internally
-        return bitops.matmul_f32_i8spr_t2spt(x, w_scale, w_packed, bias)
+        """
+        Bitops inference with dynamic activation quantization.
+        
+        The bitops API requires:
+        - x: int8 quantized activations [M, K]
+        - x_scale: float32 per-row scales [M]
+        - w_packed: packed ternary weights [N, K/4]
+        - w_scale: float32 per-channel scales [N]
+        - bias: float32 bias [N]
+        """
+        original_shape = x.shape
+        # Handle 3D input (batch, seq_len, features)
+        if x.dim() == 3:
+            batch, seq_len, features = x.shape
+            x = x.reshape(batch * seq_len, features)
+        
+        M = x.shape[0]
+        
+        # Quantize activations to int8 with per-row scales
+        x_scale, x_quant = self._quantize_act(x)
+        x_quant = x_quant.to(torch.int8)
+        # x_scale is [M, 1], bitops expects [M]
+        x_scale = x_scale.squeeze(-1).to(torch.float32)
+        
+        # Call bitops with pre-quantized activations
+        y = bitops.bitmatmul(x_quant, x_scale, w_packed, w_scale, bias)
+        
+        # Restore original shape if needed
+        if len(original_shape) == 3:
+            y = y.reshape(batch, seq_len, -1)
+        
+        return y
     
     def _fallback_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_quant: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
-        # w_scale here is the actual scale (from get_deployment_weights)
-        # TWNQuantizer uses scale (not inv_scale) for activations
+        # Quantize activations using the same method as forward
         x_scale, x_quant = self._quantize_act(x)
         x_dequant = x_quant * x_scale
+        # w_scale is [1] for fallback, broadcast works naturally
         w_dequant = w_quant * w_scale
         return F.linear(x_dequant, w_dequant, bias)
 
@@ -233,6 +317,9 @@ class ParetoQQuantizer(Quantizer):
     Key: α is TRAINABLE (learnable range).
 
     scale_granularity: Hard-coded to "channel" - one α per output channel/row (more accurate)
+    
+    Note: This quantizer uses per-channel weight scales, which is natively supported
+    by bitops (w_scale shape [N]).
     """
 
     def __init__(
@@ -240,9 +327,11 @@ class ParetoQQuantizer(Quantizer):
         out_features: int,
         in_features: int,
         eps: float = 1e-5,
+        use_fallback: bool = False,
     ):
         super().__init__(out_features, in_features)
         self.eps = eps
+        self.use_fallback = use_fallback
         # We store an unconstrained parameter and map -> positive scale via softplus.
         # Shape: [out_features, 1] for per-channel scale (broadcasts over in_features)
         self._logit_alpha = nn.Parameter(torch.zeros(out_features, 1))
@@ -268,10 +357,18 @@ class ParetoQQuantizer(Quantizer):
         self._alpha_inited = True
 
     def _quantize_act(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Quantize activations to int8.
+        
+        Returns:
+            Tuple of (scale, quantized_activations)
+            where scale is per-row and quantized is int8 in [-128, 127]
+        """
         # For linear layers, quantize over the last dimension (features)
-        inv_scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=self.eps)
-        y = (x * inv_scale).round().clamp_(-128, 127)
-        return inv_scale, y
+        max_val = x.abs().max(dim=-1, keepdim=True).values.clamp_(min=self.eps)
+        scale = max_val / 127.0
+        y = (x / scale).round().clamp_(-128, 127)
+        return scale, y
 
     def _seq_ternary(self, w_hat: torch.Tensor) -> torch.Tensor:
         # SEQ for k=3 levels over [-1,1] gives symmetric balanced levels.
@@ -284,9 +381,9 @@ class ParetoQQuantizer(Quantizer):
     def _quantize_weight(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
-          alpha (broadcastable),
-          q in {-1,0,1},
-          mask for STE (|w/alpha| < 1)
+          alpha: per-channel scales [out_features, 1]
+          q: ternary weights in {-1,0,1}
+          ste_mask: mask for STE (|w/alpha| < 1)
         """
         self._maybe_init_alpha_from_weight(w)
 
@@ -300,9 +397,9 @@ class ParetoQQuantizer(Quantizer):
         return alpha, q, ste_mask
 
     def forward(self, x: torch.Tensor, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # activations: keep your int8 fake-quant
-        x_inv_scale, x_q = self._quantize_act(x)
-        x_deq = x_q / x_inv_scale
+        # activations: int8 fake-quant
+        x_scale, x_q = self._quantize_act(x)
+        x_deq = x_q * x_scale
         x_ste = x + (x_deq - x).detach()
 
         # weights: SEQ ternary with trainable alpha
@@ -317,14 +414,56 @@ class ParetoQQuantizer(Quantizer):
     def get_deployment_weights(self, weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         alpha, w_q, _ = self._quantize_weight(weight)
 
-        # Per-channel quantization - fallback only (bitops doesn't support per-channel scales)
-        # w_scale shape: [out_features, 1] for per-channel scaling
-        w_scale = alpha.to(torch.float32)
-        return w_scale, w_q.to(torch.float32)
+        if self.use_fallback or not HAS_BITOPS:
+            # Fallback: keep [out_features, 1] shape for broadcasting in F.linear
+            w_scale = alpha.to(torch.float32)
+            return w_scale, w_q.to(torch.float32)
+        else:
+            # bitops: w_scale should be [N] (per output channel)
+            # alpha is [out_features, 1], squeeze to [out_features]
+            w_scale_vec = alpha.squeeze(-1).contiguous().to(torch.float32)
+            w_q_int8 = w_q.to(torch.int8)
+            w_packed = bitops.bitmatmulpack(w_q_int8)
+            return w_scale_vec, w_packed
 
     def get_inference_fn(self) -> Callable:
-        # Per-channel quantization requires fallback (bitops doesn't support per-channel scales)
-        return self._fallback_inference_fn
+        if self.use_fallback or not HAS_BITOPS:
+            return self._fallback_inference_fn
+        else:
+            return self._bitops_inference_fn
+
+    def _bitops_inference_fn(
+        self,
+        x: torch.Tensor,
+        w_scale: torch.Tensor,
+        w_packed: torch.Tensor,
+        bias: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Bitops inference with dynamic activation quantization.
+        
+        ParetoQ uses per-channel weight scales which bitops natively supports.
+        """
+        original_shape = x.shape
+        # Handle 3D input (batch, seq_len, features)
+        if x.dim() == 3:
+            batch, seq_len, features = x.shape
+            x = x.reshape(batch * seq_len, features)
+        
+        # Quantize activations to int8 with per-row scales
+        x_scale, x_quant = self._quantize_act(x)
+        x_quant = x_quant.to(torch.int8)
+        # x_scale is [M, 1], bitops expects [M]
+        x_scale = x_scale.squeeze(-1).to(torch.float32)
+        
+        # Call bitops - w_scale is already [N] from get_deployment_weights
+        y = bitops.bitmatmul(x_quant, x_scale, w_packed, w_scale, bias)
+        
+        # Restore original shape if needed
+        if len(original_shape) == 3:
+            y = y.reshape(batch, seq_len, -1)
+        
+        return y
 
     def _fallback_inference_fn(
         self,
@@ -333,10 +472,10 @@ class ParetoQQuantizer(Quantizer):
         w_quant: torch.Tensor,
         bias: torch.Tensor
     ) -> torch.Tensor:
-        x_inv_scale, x_q = self._quantize_act(x)
-        x_deq = x_q / x_inv_scale
+        x_scale, x_q = self._quantize_act(x)
+        x_deq = x_q * x_scale
 
-        # w_scale is [out_features, 1] for per-channel scaling
+        # w_scale is [out_features, 1] for fallback, broadcasts correctly
         w_deq = w_quant * w_scale
         return F.linear(x_deq, w_deq, bias)
 

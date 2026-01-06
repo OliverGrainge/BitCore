@@ -80,36 +80,65 @@ class BitNetQuantizer(Quantizer):
         """
         Quantize activations to int8.
         
+        Matches reference implementation exactly:
+        Qn = -2^(num_bits-1) = -128
+        Qp = 2^(num_bits-1) - 1 = 127
+        s = Qp / x.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
+        result = (x * s).round().clamp(Qn, Qp) / s
+        
         Returns:
             Tuple of (scale, quantized_activations)
             where scale is per-row and quantized is int8 in [-128, 127]
         """
-        # For linear layers, quantize over the last dimension (features)
-        max_val = x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
-        scale = max_val / 127.0
-        y = (x / scale).round().clamp_(-128, 127)
-        return scale, y
+        # Match reference exactly: Qn = -128, Qp = 127
+        Qn = -128
+        Qp = 127
+        # Match reference: s = Qp / max_val (not max_val / Qp)
+        # Use clamp (not clamp_) to match reference behavior
+        max_val = x.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
+        s = Qp / max_val
+        # Match reference: (x * s).round().clamp(Qn, Qp)
+        # Use clamp (not clamp_) to match reference behavior
+        quantized = (x * s).round().clamp(Qn, Qp)
+        # For dequantization, we need scale = 1/s = max_val / Qp
+        scale = 1.0 / s  # This is max_val / Qp
+        return scale, quantized
 
     def _quantize_weight(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: 
         """
         Quantize weights to ternary {-1, 0, 1}.
         
+        Matches reference implementation exactly:
+        s = 1 / weight.abs().mean().clamp(min=1e-5)
+        result = (weight * s).round().clamp(-1, 1) / s
+        
         Returns:
             Tuple of (scale, quantized_weights) - scale is per-tensor (scalar)
         """
-        scale = w.abs().mean().clamp_(min=1e-5)
-        u = (w / scale).round().clamp_(-1, 1) 
-        return scale, u
+        # Match reference exactly: s = 1 / mean
+        # Use clamp (not clamp_) to match reference behavior
+        s = 1.0 / w.abs().mean().clamp(min=1e-5)
+        # Match reference: (weight * s).round().clamp(-1, 1)
+        # Use clamp (not clamp_) to match reference behavior
+        quantized = (w * s).round().clamp(-1, 1)
+        # For dequantization, we need scale = 1/s = mean
+        scale = 1.0 / s
+        return scale, quantized
     
     def forward(self, x: torch.Tensor, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Match reference implementation exactly
+        # Reference: quant_input = input + (activation_quant(input, self.input_bits) - input).detach()
+        # Reference: quant_weight = self.weight + (weight_quant(self.weight, self.weight_bits) - self.weight).detach()
+        
+        # Use helper methods to get dequantized values
         x_scale, x_quant = self._quantize_act(x)
-        w_scale, w_quant = self._quantize_weight(w)
-        x_dequant = x_quant * x_scale
-        w_dequant = w_quant * w_scale
-        # Use STE for training, but in eval mode (no_grad) we want exact quantization behavior
-        # to match deploy mode. The detach() ensures gradients don't flow through quantization.
+        x_dequant = x_quant * x_scale  # This equals (x * s).round().clamp(Qn, Qp) / s
         x_dequant_ste = x + (x_dequant - x).detach()
+        
+        w_scale, w_quant = self._quantize_weight(w)
+        w_dequant = w_quant * w_scale  # This equals (w * s).round().clamp(-1, 1) / s
         w_dequant_ste = w + (w_dequant - w).detach()
+        
         return x_dequant_ste, w_dequant_ste
         
     def get_deployment_weights(self, weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:

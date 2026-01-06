@@ -1,10 +1,10 @@
 # BitCore
 
-BitCore provides quantization-aware binary linear layers (`BitLinear`) that can seamlessly swap into deployment mode using the accompanying `bitops` extension for efficient inference.
+BitCore provides quantization-aware ternary linear layers (`BitLinear`) that can seamlessly swap into deployment mode using the accompanying `bitops` extension for efficient inference.
 
 ## Features
 
-- **Drop-in Replacement**: `BitLinear` is a drop-in replacement for `nn.Linear` with binary quantization
+- **Drop-in Replacement**: `BitLinear` is a drop-in replacement for `nn.Linear` with ternary quantization
 - **Training & Deployment Modes**: Seamlessly switch between training (gradient-aware) and deployment (optimized) modes
 - **Multiple Quantizers**: Support for BitNet, TWN (Ternary Weight Networks), and ParetoQ quantization schemes
 - **BitOps Integration**: Optional integration with `bitops` for accelerated inference in deployment mode
@@ -38,7 +38,7 @@ pip install git+https://github.com/olivergrainge/BitCore.git
 import torch
 from bitcore import BitLinear
 
-# Create a binary linear layer
+# Create a ternary linear layer
 layer = BitLinear(in_features=128, out_features=64, quant_type="bitnet")
 
 # Use in training mode (default)

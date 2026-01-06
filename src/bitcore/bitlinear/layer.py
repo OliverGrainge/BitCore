@@ -170,3 +170,36 @@ class BitLinear(nn.Module):
             self.w_packed,
             self.bias_buffer
         )
+
+    def __repr__(self) -> str:
+        """Return a string representation of the BitLinear layer."""
+        # Determine bias status
+        if self._is_deployed:
+            has_bias = hasattr(self, 'bias_buffer') and self.bias_buffer is not None
+            # Get device from buffers if deployed
+            if hasattr(self, 'w_scale'):
+                device = self.w_scale.device
+            else:
+                device = None
+        else:
+            has_bias = self.bias is not None
+            # Get device from weight parameter if not deployed
+            if hasattr(self, 'weight'):
+                device = self.weight.device
+            else:
+                device = None
+        
+        # Build representation string
+        parts = [
+            f"BitLinear({self.in_features}, {self.out_features}",
+            f"bias={has_bias}",
+            f"quant_type='{self.quant_type}'"
+        ]
+        
+        if self._is_deployed:
+            parts.append("deployed=True")
+        
+        if device is not None and device.type != 'cpu':
+            parts.append(f"device='{device}'")
+        
+        return ", ".join(parts) + ")"

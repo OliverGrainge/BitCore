@@ -1,4 +1,4 @@
-"""Quantization configurations for BitLinear layers."""
+"""Quantization configurations for BitLinear layers - CORRECTED VERSION"""
 
 import torch
 from torch import nn
@@ -76,86 +76,86 @@ class BitNetQuantizer(Quantizer):
         super().__init__(out_features, in_features)
         self.use_fallback = use_fallback
 
-    def _quantize_act(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _activation_quant(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Quantize activations to int8.
+        Quantize activations to int8 and dequantize - MATCHES REFERENCE EXACTLY.
         
-        Matches reference implementation exactly:
-        Qn = -2^(num_bits-1) = -128
-        Qp = 2^(num_bits-1) - 1 = 127
-        s = Qp / x.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
-        result = (x * s).round().clamp(Qn, Qp) / s
+        Reference: activation_quant(x, num_bits=8)
         
         Returns:
-            Tuple of (scale, quantized_activations)
-            where scale is per-row and quantized is int8 in [-128, 127]
+            Dequantized activations (for training with STE)
         """
-        # Match reference exactly: Qn = -128, Qp = 127
-        Qn = -128
-        Qp = 127
-        # Match reference: s = Qp / max_val (not max_val / Qp)
-        # Use clamp (not clamp_) to match reference behavior
-        max_val = x.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
-        s = Qp / max_val
-        # Match reference: (x * s).round().clamp(Qn, Qp)
-        # Use clamp (not clamp_) to match reference behavior
-        quantized = (x * s).round().clamp(Qn, Qp)
-        # For dequantization, we need scale = 1/s = max_val / Qp
-        scale = 1.0 / s  # This is max_val / Qp
-        return scale, quantized
+        dtype = x.dtype
+        x = x.float()
+        Qn = -128  # -2**(8-1)
+        Qp = 127   # 2**(8-1) - 1
+        s = Qp / x.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
+        result = (x * s).round().clamp(Qn, Qp) / s
+        return result.type(dtype)
 
-    def _quantize_weight(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: 
+    def _weight_quant(self, w: torch.Tensor) -> torch.Tensor: 
         """
-        Quantize weights to ternary {-1, 0, 1}.
+        Quantize weights to ternary {-1, 0, 1} - MATCHES REFERENCE EXACTLY.
         
-        Matches reference implementation exactly:
+        Reference:
         s = 1 / weight.abs().mean().clamp(min=1e-5)
         result = (weight * s).round().clamp(-1, 1) / s
         
         Returns:
-            Tuple of (scale, quantized_weights) - scale is per-tensor (scalar)
+            Dequantized ternary weights (for training with STE)
         """
-        # Match reference exactly: s = 1 / mean
-        # Use clamp (not clamp_) to match reference behavior
+        dtype = w.dtype
+        w = w.float()
         s = 1.0 / w.abs().mean().clamp(min=1e-5)
-        # Match reference: (weight * s).round().clamp(-1, 1)
-        # Use clamp (not clamp_) to match reference behavior
-        quantized = (w * s).round().clamp(-1, 1)
-        # For dequantization, we need scale = 1/s = mean
-        scale = 1.0 / s
-        return scale, quantized
+        result = (w * s).round().clamp(-1, 1) / s
+        return result.type(dtype)
     
     def forward(self, x: torch.Tensor, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Match reference implementation exactly
-        # Reference: quant_input = input + (activation_quant(input, self.input_bits) - input).detach()
-        # Reference: quant_weight = self.weight + (weight_quant(self.weight, self.weight_bits) - self.weight).detach()
+        """
+        Forward pass matching reference implementation's STE.
         
-        # Use helper methods to get dequantized values
-        x_scale, x_quant = self._quantize_act(x)
-        x_dequant = x_quant * x_scale  # This equals (x * s).round().clamp(Qn, Qp) / s
-        x_dequant_ste = x + (x_dequant - x).detach()
+        Reference:
+        quant_input = input + (activation_quant(input) - input).detach()
+        quant_weight = weight + (weight_quant(weight) - weight).detach()
+        """
+        # Quantize and dequantize
+        x_quant = self._activation_quant(x)
+        w_quant = self._weight_quant(w)
         
-        w_scale, w_quant = self._quantize_weight(w)
-        w_dequant = w_quant * w_scale  # This equals (w * s).round().clamp(-1, 1) / s
-        w_dequant_ste = w + (w_dequant - w).detach()
+        # Apply STE exactly as reference
+        x_ste = x + (x_quant - x).detach()
+        w_ste = w + (w_quant - w).detach()
         
-        return x_dequant_ste, w_dequant_ste
+        return x_ste, w_ste
         
     def get_deployment_weights(self, weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Use fallback format if explicitly requested or if bitops is not available
+        """
+        Prepare weights for deployment.
+        
+        For bitops: need to extract the normalized ternary values {-1, 0, 1} and the scale.
+        For fallback: use the dequantized weights directly.
+        """
         if self.use_fallback or not HAS_BITOPS:
-            w_scale, w_quant = self._quantize_weight(weight)
-            w_scale = w_scale.reshape(1).to(torch.float32)
-            w_quant = w_quant.to(torch.float32)
-            return w_scale, w_quant
+            # Fallback: return dequantized weights with dummy scale
+            w_quant = self._weight_quant(weight)
+            w_scale = torch.tensor([1.0], dtype=torch.float32, device=weight.device)
+            return w_scale, w_quant.to(torch.float32)
         else:
-            w_scale, w_quant = self._quantize_weight(weight)
-            w_quant = w_quant.to(torch.int8)
+            # Bitops: need normalized ternary values and the actual scale
+            dtype = weight.dtype
+            w = weight.float()
+            mean_abs = w.abs().mean().clamp(min=1e-5)
+            s = 1.0 / mean_abs
+            # Get normalized ternary values {-1, 0, 1}
+            w_normalized = (w * s).round().clamp(-1, 1)
+            w_normalized_int8 = w_normalized.to(torch.int8)
+            
             # bitops expects w_scale as [N] (per output channel)
             # For per-tensor quantization, broadcast scalar to all channels
-            w_scale_vec = w_scale.expand(self.out_features).contiguous().to(torch.float32)
-            # Use new bitops packing function
-            w_packed = bitops.bitmatmulpack(w_quant)
+            w_scale_vec = mean_abs.expand(self.out_features).contiguous().to(torch.float32)
+            
+            # Pack the normalized ternary weights
+            w_packed = bitops.bitmatmulpack(w_normalized_int8)
             return w_scale_vec, w_packed
 
     def get_inference_fn(self) -> Callable:
@@ -168,12 +168,9 @@ class BitNetQuantizer(Quantizer):
         """
         Bitops inference with dynamic activation quantization.
         
-        The bitops API requires:
-        - x: int8 quantized activations [M, K]
-        - x_scale: float32 per-row scales [M]
-        - w_packed: packed ternary weights [N, K/4]
-        - w_scale: float32 per-channel scales [N]
-        - bias: float32 bias [N]
+        IMPORTANT: This must match the training-time quantization behavior!
+        The reference uses per-token quantization (max per row), and bitops
+        also uses per-token quantization.
         """
         original_shape = x.shape
         # Handle 3D input (batch, seq_len, features)
@@ -181,31 +178,39 @@ class BitNetQuantizer(Quantizer):
             batch, seq_len, features = x.shape
             x = x.reshape(batch * seq_len, features)
         
-        M = x.shape[0]
+        dtype = x.dtype
+        x = x.float()
         
-        # Quantize activations to int8 with per-row scales
-        x_scale, x_quant = self._quantize_act(x)
-        x_quant = x_quant.to(torch.int8)
-        # x_scale is [M, 1], bitops expects [M]
-        x_scale = x_scale.squeeze(-1).to(torch.float32)
+        # Match training-time quantization: per-token (per-row) quantization
+        Qp = 127.0
+        s = Qp / x.abs().max(dim=-1, keepdim=True).values.clamp(min=1e-5)
         
-        # Call bitops with pre-quantized activations
-        # Signature: bitmatmul(x, x_scale, w_packed, w_scale, bias)
-        y = bitops.bitmatmul(x_quant, x_scale, w_packed, w_scale, bias)
+        # For bitops API:
+        # x_quant should be int8 quantized values
+        # x_scale should be the dequantization scale (1/s in our formulation)
+        x_quant_int8 = (x * s).round().clamp(-128, 127).to(torch.int8)
+        # bitops expects x_scale such that: output = x_quant * x_scale * w_quant * w_scale
+        # Our formula: x_dequant = x_quant_int / s
+        # So x_scale = 1/s
+        x_scale = (1.0 / s).squeeze(-1).to(torch.float32)
+        
+        # Call bitops
+        y = bitops.bitmatmul(x_quant_int8, x_scale, w_packed, w_scale, bias)
         
         # Restore original shape if needed
         if len(original_shape) == 3:
             y = y.reshape(batch, seq_len, -1)
         
-        return y
+        return y.type(dtype)
     
     def _fallback_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_quant: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
-        # Quantize activations using the same method as forward
-        x_scale, x_quant = self._quantize_act(x)
-        x_dequant = x_quant * x_scale
-        # w_scale is [1] for fallback, broadcast works naturally
-        w_dequant = w_quant * w_scale
-        return F.linear(x_dequant, w_dequant, bias)
+        """
+        Fallback inference matching the reference implementation exactly.
+        """
+        # Quantize activations using the same method as training
+        x_quant = self._activation_quant(x)
+        # w_quant already contains dequantized weights, w_scale is 1.0
+        return F.linear(x_quant, w_quant, bias)
     
 
 #======================== TWN QUANTIZER ===================================

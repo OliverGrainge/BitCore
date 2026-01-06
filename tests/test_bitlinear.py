@@ -39,7 +39,7 @@ def test_bitlinear_deploy_forward_cpu(quant_type):
     layer = BitLinear(in_features=16, out_features=16, bias=False, quant_type=quant_type)
     x = torch.randn(8, 16)
 
-    layer._deploy()
+    layer.deploy()
     assert layer._is_deployed is True
 
     y = layer(x)
@@ -56,7 +56,7 @@ def test_bitlinear_eval_vs_deploy_cpu_equivalence(quant_type):
     with torch.no_grad():
         y_eval = layer(x)
 
-    layer._deploy()
+    layer.deploy()
 
     with torch.no_grad():
         y_deploy = layer(x)
@@ -94,7 +94,7 @@ def test_bitlinear_eval_vs_deploy_gpu_equivalence():
     with torch.no_grad():
         y_eval = layer(x)
 
-    layer._deploy()
+    layer.deploy()
 
     with torch.no_grad():
         y_deploy = layer(x)
@@ -253,7 +253,7 @@ def test_bitlinear_eval_vs_deploy_various_dims_cpu(quant_type):
         with torch.no_grad():
             y_eval = layer(x)
         
-        layer._deploy()
+        layer.deploy()
         
         with torch.no_grad():
             y_deploy = layer(x)
@@ -274,7 +274,7 @@ def test_bitlinear_eval_vs_deploy_no_bias_cpu(quant_type):
     with torch.no_grad():
         y_eval = layer(x)
     
-    layer._deploy()
+    layer.deploy()
     
     with torch.no_grad():
         y_deploy = layer(x)
@@ -295,7 +295,7 @@ def test_bitlinear_eval_vs_deploy_3d_input_cpu(quant_type):
     with torch.no_grad():
         y_eval = layer(x)
     
-    layer._deploy()
+    layer.deploy()
     
     with torch.no_grad():
         y_deploy = layer(x)
@@ -322,12 +322,12 @@ def test_bitlinear_deploy_idempotent_cpu(quant_type):
     layer = BitLinear(in_features=16, out_features=32, bias=True, quant_type=quant_type)
     x = torch.randn(4, 16)
     
-    layer._deploy()
+    layer.deploy()
     with torch.no_grad():
         y1 = layer(x)
     
     # Deploy again - should be idempotent
-    layer._deploy()
+    layer.deploy()
     with torch.no_grad():
         y2 = layer(x)
     
@@ -408,7 +408,7 @@ def test_bitlinear_deploy_forward_gpu():
     layer = BitLinear(in_features=16, out_features=32, bias=True, quant_type=quant_type).to(device)
     x = torch.randn(8, 16, device=device)
     
-    layer._deploy()
+    layer.deploy()
     assert layer._is_deployed is True
     
     y = layer(x)
@@ -440,7 +440,7 @@ def test_bitlinear_eval_vs_deploy_various_dims_gpu():
         with torch.no_grad():
             y_eval = layer(x)
         
-        layer._deploy()
+        layer.deploy()
         
         with torch.no_grad():
             y_deploy = layer(x)
@@ -462,7 +462,7 @@ def test_bitlinear_eval_vs_deploy_no_bias_gpu():
     with torch.no_grad():
         y_eval = layer(x)
     
-    layer._deploy()
+    layer.deploy()
     
     with torch.no_grad():
         y_deploy = layer(x)
@@ -484,7 +484,7 @@ def test_bitlinear_eval_vs_deploy_3d_input_gpu():
     with torch.no_grad():
         y_eval = layer(x)
     
-    layer._deploy()
+    layer.deploy()
     
     with torch.no_grad():
         y_deploy = layer(x)

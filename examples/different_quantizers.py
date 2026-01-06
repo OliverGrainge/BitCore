@@ -32,15 +32,17 @@ def example_compare_quantizers():
     print("Comparing Quantizers")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Create same input for all quantizers
-    x = torch.randn(8, 64)
+    x = torch.randn(8, 64, device=device)
     
     print("Input shape:", x.shape)
     print()
     
     # Test each quantizer
     for quant_type in QUANTIZERS.keys():
-        layer = BitLinear(in_features=64, out_features=32, quant_type=quant_type)
+        layer = BitLinear(in_features=64, out_features=32, quant_type=quant_type).to(device)
         y = layer(x)
         
         print(f"Quantizer '{quant_type}':")
@@ -73,8 +75,9 @@ def example_quantizer_in_model():
             x = self.layer3(x)
             return x
     
-    model = MixedQuantizerNet()
-    x = torch.randn(8, 128)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = MixedQuantizerNet().to(device)
+    x = torch.randn(8, 128, device=device)
     y = model(x)
     
     print("Model with mixed quantizers:")
@@ -92,8 +95,10 @@ def example_quantizer_default():
     print("Default Quantizer")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Create layer without specifying quant_type
-    layer = BitLinear(in_features=64, out_features=32)
+    layer = BitLinear(in_features=64, out_features=32).to(device)
     
     print(f"Default quantizer type: {layer.quant_type}")
     print("(If not specified, defaults to 'bitnet')")
@@ -108,11 +113,12 @@ def example_quantizer_training():
     
     import torch.nn as nn
     
-    x = torch.randn(8, 64, requires_grad=True)
-    target = torch.randn(8, 32)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    x = torch.randn(8, 64, device=device, requires_grad=True)
+    target = torch.randn(8, 32, device=device)
     
     for quant_type in QUANTIZERS.keys():
-        layer = BitLinear(in_features=64, out_features=32, quant_type=quant_type)
+        layer = BitLinear(in_features=64, out_features=32, quant_type=quant_type).to(device)
         layer.train()
         
         y = layer(x)
@@ -131,10 +137,11 @@ def example_quantizer_deployment():
     print("Deployment with Different Quantizers")
     print("=" * 60)
     
-    x = torch.randn(8, 64)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    x = torch.randn(8, 64, device=device)
     
     for quant_type in QUANTIZERS.keys():
-        layer = BitLinear(in_features=64, out_features=32, quant_type=quant_type)
+        layer = BitLinear(in_features=64, out_features=32, quant_type=quant_type).to(device)
         
         # Eval mode (before deployment)
         layer.eval()
@@ -142,7 +149,7 @@ def example_quantizer_deployment():
             y_eval = layer(x)
         
         # Deploy mode (after deployment)
-        layer._deploy()
+        layer.deploy()
         with torch.no_grad():
             y_deploy = layer(x)
         

@@ -18,6 +18,8 @@ def example_simple_mlp():
     print("Simple MLP")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     class SimpleMLP(nn.Module):
         def __init__(self, input_dim=128, hidden_dims=[64, 32], output_dim=10):
             super().__init__()
@@ -42,8 +44,8 @@ def example_simple_mlp():
         def forward(self, x):
             return self.network(x)
     
-    model = SimpleMLP(input_dim=128, hidden_dims=[64, 32], output_dim=10)
-    x = torch.randn(16, 128)
+    model = SimpleMLP(input_dim=128, hidden_dims=[64, 32], output_dim=10).to(device)
+    x = torch.randn(16, 128, device=device)
     y = model(x)
     
     print(f"Model architecture:")
@@ -58,6 +60,8 @@ def example_classifier():
     print("=" * 60)
     print("Classifier Model")
     print("=" * 60)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     class BitClassifier(nn.Module):
         def __init__(self, num_classes=10):
@@ -77,8 +81,8 @@ def example_classifier():
             x = self.fc3(x)
             return x
     
-    model = BitClassifier(num_classes=10)
-    x = torch.randn(32, 784)  # Batch of flattened images
+    model = BitClassifier(num_classes=10).to(device)
+    x = torch.randn(32, 784, device=device)  # Batch of flattened images
     y = model(x)
     
     print(f"Input shape: {x.shape}")
@@ -93,6 +97,8 @@ def example_transformer_ffn():
     print("Transformer Feed-Forward Network")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     class TransformerFFN(nn.Module):
         def __init__(self, d_model=128, d_ff=256):
             super().__init__()
@@ -104,8 +110,8 @@ def example_transformer_ffn():
             # x: (batch, seq_len, d_model)
             return self.w2(self.relu(self.w1(x)))
     
-    model = TransformerFFN(d_model=128, d_ff=256)
-    x = torch.randn(4, 20, 128)  # (batch, seq_len, d_model)
+    model = TransformerFFN(d_model=128, d_ff=256).to(device)
+    x = torch.randn(4, 20, 128, device=device)  # (batch, seq_len, d_model)
     y = model(x)
     
     print(f"Input shape: {x.shape}  # (batch, seq_len, d_model)")
@@ -120,6 +126,8 @@ def example_residual_block():
     print("Residual Block")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     class ResidualBlock(nn.Module):
         def __init__(self, dim=128):
             super().__init__()
@@ -133,8 +141,8 @@ def example_residual_block():
             x = self.fc2(x)
             return self.relu(x + residual)  # Residual connection
     
-    model = ResidualBlock(dim=128)
-    x = torch.randn(8, 128)
+    model = ResidualBlock(dim=128).to(device)
+    x = torch.randn(8, 128, device=device)
     y = model(x)
     
     print(f"Input shape: {x.shape}")
@@ -149,6 +157,8 @@ def example_sequential_model():
     print("Sequential Model")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     model = nn.Sequential(
         BitLinear(128, 64, quant_type="bitnet"),
         nn.ReLU(),
@@ -157,9 +167,9 @@ def example_sequential_model():
         nn.ReLU(),
         nn.Dropout(0.1),
         BitLinear(32, 10, quant_type="bitnet"),
-    )
+    ).to(device)
     
-    x = torch.randn(16, 128)
+    x = torch.randn(16, 128, device=device)
     y = model(x)
     
     print(f"Input shape: {x.shape}")
@@ -173,6 +183,8 @@ def example_mixed_precision_model():
     print("=" * 60)
     print("Mixed Precision Model")
     print("=" * 60)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     class MixedModel(nn.Module):
         def __init__(self):
@@ -190,8 +202,8 @@ def example_mixed_precision_model():
             x = self.fc3(x)
             return x
     
-    model = MixedModel()
-    x = torch.randn(16, 128)
+    model = MixedModel().to(device)
+    x = torch.randn(16, 128, device=device)
     y = model(x)
     
     print(f"Input shape: {x.shape}")

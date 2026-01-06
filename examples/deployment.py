@@ -75,7 +75,7 @@ def example_deployment_basic():
     
     # Switch to deployment mode
     print("Switching to deployment mode...")
-    layer._deploy()
+    layer.deploy()
     print(f"Is deployed: {layer._is_deployed}")
     print()
     
@@ -104,7 +104,7 @@ def example_eval_vs_deploy():
         y_eval = layer(x)
     
     # Deploy mode
-    layer._deploy()
+    layer.deploy()
     size_after = get_layer_size(layer)
     using_bitops = check_bitops_usage(layer)
     
@@ -191,7 +191,7 @@ def example_llm_throughput():
         print(f"{config_str:<20} {'Eval':<8} {eval_throughput_kilo_tok_s:>23.2f} {'N/A':<12}")
         
         # Deploy mode
-        layer._deploy()
+        layer.deploy()
         using_bitops = check_bitops_usage(layer)
         
         # Get deploy output for equivalence check
@@ -286,7 +286,7 @@ def example_latency_model():
     # Deploy all BitLinear layers
     for module in model.modules():
         if isinstance(module, BitLinear):
-            module._deploy()
+            module.deploy()
     
     # Warmup after deployment
     with torch.no_grad():
@@ -329,7 +329,7 @@ def example_latency_batch_sizes():
     print(f"Device: {device}")
     
     layer = BitLinear(in_features=256, out_features=128, bias=True).to(device)
-    layer._deploy()
+    layer.deploy()
     layer.eval()
     
     batch_sizes = [1, 8, 16, 32, 64, 128]
@@ -404,7 +404,7 @@ def example_deploy_model():
     
     for module in model.modules():
         if isinstance(module, BitLinear):
-            module._deploy()
+            module.deploy()
             using_bitops_list.append(check_bitops_usage(module))
     
     # After deployment
@@ -436,7 +436,7 @@ def example_deploy_idempotent():
     x = torch.randn(4, 32)
     
     # First deployment
-    layer._deploy()
+    layer.deploy()
     layer.eval()
     with torch.no_grad():
         y1 = layer(x)
@@ -445,7 +445,7 @@ def example_deploy_idempotent():
     print(f"Output shape: {y1.shape}")
     
     # Deploy again (should be safe)
-    layer._deploy()
+    layer.deploy()
     with torch.no_grad():
         y2 = layer(x)
     
@@ -470,7 +470,7 @@ def example_deployment_without_bias():
     print(f"Layer has bias: {layer.bias is not None}")
     
     # Deploy
-    layer._deploy()
+    layer.deploy()
     layer.eval()
     
     with torch.no_grad():

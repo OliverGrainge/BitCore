@@ -18,8 +18,10 @@ def example_basic_conversion():
     print("Basic Conversion")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Create a standard PyTorch Linear layer
-    linear = nn.Linear(in_features=128, out_features=64, bias=True)
+    linear = nn.Linear(in_features=128, out_features=64, bias=True).to(device)
     
     # Initialize with some weights (for demonstration)
     nn.init.xavier_uniform_(linear.weight)
@@ -54,8 +56,10 @@ def example_conversion_with_different_quantizers():
     print("Conversion with Different Quantizers")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Create a Linear layer
-    linear = nn.Linear(in_features=64, out_features=32, bias=True)
+    linear = nn.Linear(in_features=64, out_features=32, bias=True).to(device)
     nn.init.xavier_uniform_(linear.weight)
     
     # Convert with different quantizers
@@ -76,8 +80,10 @@ def example_conversion_no_bias():
     print("Conversion Without Bias")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Create Linear layer without bias
-    linear = nn.Linear(in_features=64, out_features=32, bias=False)
+    linear = nn.Linear(in_features=64, out_features=32, bias=False).to(device)
     nn.init.xavier_uniform_(linear.weight)
     
     print("Original Linear layer:")
@@ -115,9 +121,11 @@ def example_convert_model():
             x = self.fc3(x)
             return x
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Create standard model
-    standard_model = StandardNet()
-    x = torch.randn(8, 128)
+    standard_model = StandardNet().to(device)
+    x = torch.randn(8, 128, device=device)
     
     # Get output from standard model
     with torch.no_grad():
@@ -142,7 +150,7 @@ def example_convert_model():
             x = self.fc3(x)
             return x
     
-    bit_model = BitNet(standard_model)
+    bit_model = BitNet(standard_model).to(device)
     
     with torch.no_grad():
         y_bit = bit_model(x)
@@ -164,9 +172,11 @@ def example_conversion_preserves_gradients():
     print("Conversion Preserves Gradients")
     print("=" * 60)
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Create and train a Linear layer (simulated)
-    linear = nn.Linear(64, 32, bias=True)
-    x = torch.randn(4, 64, requires_grad=True)
+    linear = nn.Linear(64, 32, bias=True).to(device)
+    x = torch.randn(4, 64, device=device, requires_grad=True)
     
     # Forward pass with Linear
     y_linear = linear(x)

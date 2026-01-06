@@ -17,10 +17,11 @@ def example_2d_input():
     print("2D Input (batch, features)")
     print("=" * 60)
     
-    layer = BitLinear(in_features=64, out_features=32, bias=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    layer = BitLinear(in_features=64, out_features=32, bias=True).to(device)
     
     # 2D input: (batch, features)
-    x = torch.randn(8, 64)
+    x = torch.randn(8, 64, device=device)
     y = layer(x)
     
     print(f"Input shape: {x.shape}")
@@ -35,13 +36,14 @@ def example_3d_input():
     print("3D Input (batch, sequence, features)")
     print("=" * 60)
     
-    layer = BitLinear(in_features=64, out_features=32, bias=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    layer = BitLinear(in_features=64, out_features=32, bias=True).to(device)
     
     # 3D input: (batch, sequence_length, features)
     # Common for transformer models, RNNs, etc.
     batch_size = 4
     seq_len = 10
-    x = torch.randn(batch_size, seq_len, 64)
+    x = torch.randn(batch_size, seq_len, 64, device=device)
     y = layer(x)
     
     print(f"Input shape: {x.shape}  # (batch, seq_len, features)")
@@ -56,10 +58,11 @@ def example_4d_input():
     print("4D Input (batch, ..., features)")
     print("=" * 60)
     
-    layer = BitLinear(in_features=64, out_features=32, bias=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    layer = BitLinear(in_features=64, out_features=32, bias=True).to(device)
     
     # 4D input: (batch, channels, height, features)
-    x = torch.randn(2, 3, 5, 64)
+    x = torch.randn(2, 3, 5, 64, device=device)
     y = layer(x)
     
     print(f"Input shape: {x.shape}")
@@ -74,12 +77,13 @@ def example_various_batch_sizes():
     print("Various Batch Sizes")
     print("=" * 60)
     
-    layer = BitLinear(in_features=64, out_features=32, bias=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    layer = BitLinear(in_features=64, out_features=32, bias=True).to(device)
     
     batch_sizes = [1, 4, 8, 16, 32]
     
     for batch_size in batch_sizes:
-        x = torch.randn(batch_size, 64)
+        x = torch.randn(batch_size, 64, device=device)
         y = layer(x)
         print(f"Batch size {batch_size:2d}: {x.shape} -> {y.shape}")
     print()
@@ -107,12 +111,13 @@ def example_transformer_like():
             x = self.w2(x)
             return x
     
-    model = TransformerFFN(d_model=128, d_ff=256)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = TransformerFFN(d_model=128, d_ff=256).to(device)
     
     # Input: (batch, seq_len, d_model)
     batch_size = 4
     seq_len = 20
-    x = torch.randn(batch_size, seq_len, 128)
+    x = torch.randn(batch_size, seq_len, 128, device=device)
     
     y = model(x)
     
@@ -128,13 +133,14 @@ def example_sequence_various_lengths():
     print("Various Sequence Lengths")
     print("=" * 60)
     
-    layer = BitLinear(in_features=64, out_features=32, bias=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    layer = BitLinear(in_features=64, out_features=32, bias=True).to(device)
     batch_size = 4
     
     seq_lengths = [5, 10, 20, 50, 100]
     
     for seq_len in seq_lengths:
-        x = torch.randn(batch_size, seq_len, 64)
+        x = torch.randn(batch_size, seq_len, 64, device=device)
         y = layer(x)
         print(f"Seq length {seq_len:3d}: {x.shape} -> {y.shape}")
     print()
@@ -146,13 +152,14 @@ def example_mixed_shapes():
     print("Mixed Input Shapes")
     print("=" * 60)
     
-    layer = BitLinear(in_features=64, out_features=32, bias=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    layer = BitLinear(in_features=64, out_features=32, bias=True).to(device)
     
     # Process different input shapes
     inputs = [
-        torch.randn(8, 64),           # 2D
-        torch.randn(4, 10, 64),       # 3D
-        torch.randn(2, 3, 5, 64),     # 4D
+        torch.randn(8, 64, device=device),           # 2D
+        torch.randn(4, 10, 64, device=device),       # 3D
+        torch.randn(2, 3, 5, 64, device=device),     # 4D
     ]
     
     for i, x in enumerate(inputs, 1):

@@ -106,7 +106,7 @@ class BitLinear(nn.Module):
         if self.bias is not None:
             nn.init.zeros_(self.bias)
 
-    def _deploy(self) -> None:
+    def deploy(self) -> None:
         """
         Deploy the layer for efficient inference using the quantizer's deployment API.
         

@@ -9,3 +9,9 @@ dist/
 .env
 venv/
 .DS_Store
+*.gz
+# MNIST data files
+examples/data/
+data/
+*.ubyte
+*.ubyte.gz

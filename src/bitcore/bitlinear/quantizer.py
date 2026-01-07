@@ -18,6 +18,8 @@ try:
 except ImportError:
     HAS_BITOPS = False
 
+HAS_BITOPS = False 
+
 
 
 # ============================================================================
@@ -105,7 +107,8 @@ class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
         """Quantize and dequantize activations to 8-bit range [-128, 127]."""
         dtype = x.dtype
         x = x.float()
-        inv_scale = 127.0 / x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5)
+        max_vals = x.abs().max(dim=-1, keepdim=True)[0].clamp_(min=1e-5)
+        inv_scale = 127.0 / max_vals
         x = (x * inv_scale).round().clamp_(-128, 127) / inv_scale
         return x.to(dtype)
 
@@ -125,11 +128,10 @@ class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
         Returns: (scale, quantized_tensor)
         """
         x = x.float()
-        scale = x.abs().max(dim=-1, keepdim=True).values.clamp_(min=1e-5) / 127.0 
-        x = (x / scale).round().clamp_(-128, 127) 
-        # Squeeze last dimension for bitops compatibility: [batch, seq_len, 1] -> [batch, seq_len]
-        scale = scale.squeeze(-1)
-        return scale.float(), x.to(torch.int8)
+        max_vals = x.abs().max(dim=-1, keepdim=False)[0].clamp_(min=1e-5)
+        scale = max_vals / 127.0  # [batch] or [batch * seq_len]
+        x_quant = (x / scale.unsqueeze(-1)).round().clamp_(-128, 127)
+        return scale.contiguous().to(torch.float32), x_quant.contiguous().to(torch.int8)
 
     @torch.compile
     def _weight_quant(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -139,8 +141,8 @@ class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
         """
         w = w.float()
         scale = w.abs().mean().clamp_(min=1e-5)
-        w = (w / scale).round().clamp_(-1, 1)
-        return scale.float(), w.to(torch.int8)
+        w_quant = (w / scale).round().clamp_(-1, 1)
+        return scale.contiguous().to(torch.float32), w_quant.contiguous().to(torch.int8)
     
     def __call__(self, x: torch.Tensor, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -166,11 +168,6 @@ class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
         """
         # Import here to avoid circular dependency issues
         # Replace these lines with your actual imports:
-        try:
-            from . import bitops
-            HAS_BITOPS = True
-        except ImportError:
-            HAS_BITOPS = False
         
         if self.use_fallback or not HAS_BITOPS:
             # Fallback mode: pre-apply weight quantization
@@ -188,13 +185,6 @@ class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
         """
         Return the appropriate inference function based on whether bitops is available.
         """
-        # Import here to avoid circular dependency issues
-        try:
-            from . import bitops
-            HAS_BITOPS = True
-        except ImportError:
-            HAS_BITOPS = False
-            
         if self.use_fallback or not HAS_BITOPS:
             return self._fallback_inference_fn
         else:
@@ -217,12 +207,8 @@ class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
             Output tensor with same shape prefix as input
         """
         # Import here to avoid circular dependency issues
-        from . import bitops
-        
         dtype = x.dtype
         x_scale, x_quant = self._activation_quant(x)
-        print("using bitops inference function")
-       
         y = bitops.bitmatmul(x_quant, x_scale, w_packed, w_scale, bias)
         return y.type(dtype)
     

@@ -64,17 +64,6 @@ class BitLinear(nn.Module):
         self._is_deployed = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply quantization-aware linear transformation suitable for training."""
-        # In eval mode with no_grad, use deploy computation path to match deploy mode exactly
-        # This ensures eval and deploy produce identical results
-        if not self.training and not torch.is_grad_enabled():
-            # Use deploy computation path for exact match with deploy mode
-            w_scale, w_packed = self.quantizer.get_deployment_weights(self.weight)
-            inference_fn = self.quantizer.get_inference_fn()
-            bias_data = self.bias if self.bias is not None else torch.zeros(self.out_features, dtype=torch.float32, device=x.device)
-            return inference_fn(x, w_scale, w_packed, bias_data)
-        
-        # Training mode: Use quantizer to get dequantized activations and weights (with STE)
         dqx, dqw = self.quantizer(x, self.weight)
         return F.linear(dqx, dqw, self.bias)
 
@@ -173,33 +162,23 @@ class BitLinear(nn.Module):
 
     def __repr__(self) -> str:
         """Return a string representation of the BitLinear layer."""
-        # Determine bias status
+        # Get device info if available
         if self._is_deployed:
-            has_bias = hasattr(self, 'bias_buffer') and self.bias_buffer is not None
-            # Get device from buffers if deployed
             if hasattr(self, 'w_scale'):
-                device = self.w_scale.device
+                device_str = f", device={self.w_scale.device}" if self.w_scale.device.type != 'cpu' else ""
             else:
-                device = None
+                device_str = ""
         else:
-            has_bias = self.bias is not None
-            # Get device from weight parameter if not deployed
             if hasattr(self, 'weight'):
-                device = self.weight.device
+                device_str = f", device={self.weight.device}" if self.weight.device.type != 'cpu' else ""
             else:
-                device = None
+                device_str = ""
         
-        # Build representation string
-        parts = [
-            f"BitLinear({self.in_features}, {self.out_features}",
-            f"bias={has_bias}",
-            f"quant_type='{self.quant_type}'"
-        ]
+        bias_str = f", bias=True" if (self.bias is not None if not self._is_deployed else hasattr(self, 'bias_buffer') and self.bias_buffer is not None) else ", bias=False"
+        deployed_str = ", deployed=True" if self._is_deployed else ""
         
-        if self._is_deployed:
-            parts.append("deployed=True")
-        
-        if device is not None and device.type != 'cpu':
-            parts.append(f"device='{device}'")
-        
-        return ", ".join(parts) + ")"
+        return (
+            f"BitLinear({self.in_features}, {self.out_features}"
+            f"{bias_str}, quant_type='{self.quant_type}'"
+            f"{deployed_str}{device_str})"
+        )

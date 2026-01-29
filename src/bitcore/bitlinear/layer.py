@@ -48,14 +48,14 @@ class BitLinear(nn.Module):
         self.out_features = out_features
         self.eps = eps
         self.quant_type = quant_type
-        
-        # Get quantizer class from registry and instantiate
-        quantizer_cls = get_quantizers(quant_type)
-        self.quantizer = quantizer_cls(out_features, in_features)
 
         # Initialize parameters
         self.weight = nn.Parameter(torch.zeros(out_features, in_features))
         self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
+
+        # Get quantizer class from registry and instantiate
+        quantizer_cls = get_quantizers(quant_type)
+        self.quantizer = quantizer_cls(self.weight.data.detach())
 
         # Initialize weights
         self._init_weights()
@@ -87,6 +87,10 @@ class BitLinear(nn.Module):
         layer.weight.data.copy_(linear.weight.data)
         if linear.bias is not None:
             layer.bias.data.copy_(linear.bias.data)
+
+        # Get quantizer class from registry and instantiate
+        quantizer_cls = get_quantizers(quant_type)
+        layer.quantizer = quantizer_cls(linear.weight.data.detach())
         return layer
 
     def _init_weights(self) -> None:

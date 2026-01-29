@@ -37,10 +37,10 @@ class Quantizer(nn.Module):
     """
     
     
-    def __init__(self, out_features: int, in_features: int):
+    def __init__(self, w: torch.Tensor):
         super().__init__()
-        self.out_features = out_features
-        self.in_features = in_features
+        self.out_features = w.shape[0]
+        self.in_features = w.shape[1]
 
     def forward(self, x: torch.Tensor, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -95,11 +95,12 @@ class _STEQuant(torch.autograd.Function):
         return grad_output, None
 
 
+
 class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
-    def __init__(self, out_features: int, in_features: int, use_fallback: bool = False):
+    def __init__(self, w: torch.Tensor, use_fallback: bool = False):
         # super().__init__(out_features, in_features)  # Uncomment if inheriting from Quantizer
-        self.out_features = out_features
-        self.in_features = in_features
+        self.out_features = w.shape[0]
+        self.in_features = w.shape[1]
         self.use_fallback = use_fallback
 
     @torch.compile
@@ -237,6 +238,150 @@ class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
     
 
 
+class BitNetChannelQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
+    def __init__(self, w: torch.Tesnor, use_fallback: bool = False):
+        # super().__init__(out_features, in_features)  # Uncomment if inheriting from Quantizer
+        self.out_features = w.shape[0]
+        self.in_features = w.shape[1]
+        self.use_fallback = use_fallback
+
+    @torch.compile
+    def _activation_quant_dequant(self, x: torch.Tensor) -> torch.Tensor:
+        """Quantize and dequantize activations to 8-bit range [-128, 127]."""
+        dtype = x.dtype
+        x = x.float()
+        max_vals = x.abs().max(dim=-1, keepdim=True)[0].clamp_(min=1e-5)
+        inv_scale = 127.0 / max_vals
+        x = (x * inv_scale).round().clamp_(-128, 127) / inv_scale
+        return x.to(dtype)
+
+    @torch.compile
+    def _weight_quant_dequant(self, w: torch.Tensor) -> torch.Tensor:
+        """Quantize and dequantize weights to ternary values {-1, 0, 1}."""
+        dtype = w.dtype
+        w = w.float()
+        inv_scale = 1.0 / w.abs().mean(dim=1, keepdim=True).clamp_(min=1e-5)
+        w = (w * inv_scale).round().clamp_(-1, 1) / inv_scale
+        return w.to(dtype)
+
+    @torch.compile
+    def _activation_quant(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Quantize activations to 8-bit integers for bitops.
+        Returns: (scale, quantized_tensor)
+        """
+        x = x.float()
+        max_vals = x.abs().max(dim=-1, keepdim=False)[0].clamp_(min=1e-5)
+        scale = max_vals / 127.0  # [batch] or [batch * seq_len]
+        x_quant = (x / scale.unsqueeze(-1)).round().clamp_(-128, 127)
+        return scale.contiguous().to(torch.float32), x_quant.contiguous().to(torch.int8)
+
+    @torch.compile
+    def _weight_quant(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Quantize weights to ternary values for bitops.
+        Returns: (scale, quantized_tensor)
+        """
+        w = w.float()
+        scale = w.abs().mean(dim=1, keepdim=True).clamp_(min=1e-5)
+        w_quant = (w / scale).round().clamp_(-1, 1)
+        return scale.contiguous().to(torch.float32), w_quant.contiguous().to(torch.int8)
+    
+    def __call__(self, x: torch.Tensor, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Training/eval path: Apply quantization with straight-through estimator.
+        Returns: (quantized_dequantized_activations, quantized_dequantized_weights)
+        """
+        x_ste = _STEQuant.apply(x, self._activation_quant_dequant)
+        w_ste = _STEQuant.apply(w, self._weight_quant_dequant)
+        return x_ste, w_ste
+        
+    def get_deployment_weights(self, weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Prepare weights for deployment.
+        
+        For fallback mode:
+            - Pre-applies weight quantization once
+            - Returns dummy scale and quantized-dequantized weights
+        
+        For bitops mode:
+            - Quantizes weights to int8
+            - Packs them using bitops.bitmatmulpack
+            - Returns scale vector and packed weights
+        """
+        # Import here to avoid circular dependency issues
+        # Replace these lines with your actual imports:
+        
+        if self.use_fallback or not HAS_BITOPS:
+            # Fallback mode: pre-apply weight quantization
+            w_scale = torch.ones((self.out_features,), dtype=weight.dtype, device=weight.device)
+            weight_dequant = self._weight_quant_dequant(weight)
+            return w_scale, weight_dequant
+        else:
+            # Bitops mode: quantize and pack weights
+            w_scale, w_quant = self._weight_quant(weight)
+            w_scale = w_scale.contiguous().to(torch.float32)
+            w_packed = bitops.bitmatmulpack(w_quant)
+            return w_scale, w_packed
+
+    def get_inference_fn(self) -> Callable:
+        """
+        Return the appropriate inference function based on whether bitops is available.
+        """
+        if self.use_fallback or not HAS_BITOPS:
+            return self._fallback_inference_fn
+        else:
+            return self._bitops_inference_fn
+    
+    def _bitops_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_packed: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        """
+        Bitops inference with dynamic activation quantization.
+        
+        This matches the training-time quantization behavior using per-token
+        quantization (max per row).
+        
+        Args:
+            x: Input activations [batch, seq_len, in_features] or [batch, in_features]
+            w_scale: Weight scale vector [out_features]
+            w_packed: Packed quantized weights
+            bias: Bias term [out_features]
+        
+        Returns:
+            Output tensor with same shape prefix as input
+        """
+        # Import here to avoid circular dependency issues
+        dtype = x.dtype
+        x_scale, x_quant = self._activation_quant(x)
+        y = bitops.bitmatmul(x_quant, x_scale, w_packed, w_scale, bias)
+        return y.type(dtype)
+    
+    def _fallback_inference_fn(self, x: torch.Tensor, w_scale: torch.Tensor, w_packed: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        """
+        Fallback inference when bitops is not available.
+        
+        Note: w_packed already contains the quantized-dequantized weights from
+        get_deployment_weights, so we only need to quantize-dequantize activations.
+        
+        Args:
+            x: Input activations [batch, seq_len, in_features] or [batch, in_features]
+            w_scale: Dummy scale (not used in fallback)
+            w_packed: Pre-quantized-dequantized weights [out_features, in_features]
+            bias: Bias term [out_features]
+        
+        Returns:
+            Output tensor with same shape prefix as input
+        """
+        
+        dtype = x.dtype
+        # w_packed already contains quantized-dequantized weights from get_deployment_weights
+        x_dequant = self._activation_quant_dequant(x)
+        output = F.linear(x_dequant, w_packed, bias)
+        return output.type(dtype)
+    
+
+
+
+
 
 
 # ============================================================================
@@ -245,6 +390,7 @@ class BitNetQuantizer:  # Replace with: class BitNetQuantizer(Quantizer):
 
 QUANTIZERS = {
     "bitnet": BitNetQuantizer,
+    "bitnet_channel": BitNetChannelQuantizer,
 }
 
 

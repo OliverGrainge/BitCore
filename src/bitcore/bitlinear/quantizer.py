@@ -242,7 +242,7 @@ class BitNetQuantizer(Quantizer):  # Replace with: class BitNetQuantizer(Quantiz
 
 
 class BitNetChannelQuantizer(Quantizer):  # Replace with: class BitNetQuantizer(Quantizer):
-    def __init__(self, w: torch.Tesnor, use_fallback: bool = False):
+    def __init__(self, w: torch.Tensor, use_fallback: bool = False):
         super().__init__(w) 
         self.use_fallback = use_fallback
 
